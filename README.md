@@ -14,3 +14,11 @@ Or for the release version
 ## Install
 
     $ cargo install
+
+## Roadmap
+
+To be compliant with find's command line arguments.
+
+## License
+
+GNU LGPL v3
