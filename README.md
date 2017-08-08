@@ -15,10 +15,16 @@ Or for the release version
 
     $ cargo install
 
+## Usage
+
+Currently, only basic directory listing is implemented:
+
+    $ bfind /path/to/directory
+
 ## Roadmap
 
-- Use two threads, one for listing files, one for printing.
-- Be compliant with find's command line arguments.
+- Use two threads, one for listing files, one for printing
+- Be compliant with `find`'s command line arguments
 
 ## License
 
