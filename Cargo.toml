@@ -1,0 +1,4 @@
+[package]
+name = "bfind"
+version = "0.0.1"
+authors = ["Zhaosheng Pan <brglng@gmail.com"]
