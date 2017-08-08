@@ -17,7 +17,13 @@ Or for the release version
 
 ## Usage
 
-Currently, only basic directory listing is implemented:
+Currently, only basic directory listing is implemented.
+
+List current working directory:
+
+    $ bfind
+
+List a specific directory:
 
     $ bfind /path/to/directory
 
