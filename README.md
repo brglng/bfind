@@ -17,7 +17,8 @@ Or for the release version
 
 ## Roadmap
 
-To be compliant with find's command line arguments.
+- Use two threads, one for listing files, one for printing.
+- Be compliant with find's command line arguments.
 
 ## License
 
