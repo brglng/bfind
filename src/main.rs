@@ -30,24 +30,18 @@ fn main() {
             Some(file) => {
                 println!("{}", &file.display());
                 if file.is_dir() {
-                    let entries = fs::read_dir(&file);
-                    match entries {
-                        Ok(entries) => {
-                            for entry in entries {
-                                match &entry {
-                                    &Ok(ref entry) => {
-                                        q.push_back(entry.path());
-                                    },
-                                    &Err(ref err) => {
-                                        println_stderr!("bfind: cannot read {:?}: {:?}", &entry, &err);
-                                    }
-                                }
-                            }
-                        },
-                        Err(err) => {
-                            println_stderr!("bfind: cannot read {:?}: {:?}", &file, &err);
+                    fs::read_dir(&file).map(|entries| {
+                        for entry in entries {
+                            entry.map(|entry| {
+                                q.push_back(entry.path());
+                            }).map_err(|err| {
+                                println_stderr!("bfind: {}", err.to_string());
+                            });
                         }
-                    }
+                    })
+                    .map_err(|err| {
+                        println_stderr!("bfind: {}: {}", file.display(), err.to_string());
+                    });
                 }
             }
         }
