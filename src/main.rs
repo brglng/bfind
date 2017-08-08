@@ -23,27 +23,20 @@ fn main() {
         q.push_back(PathBuf::from(r"."));
     }
 
-    loop {
-        let file = q.pop_front();
-        match file {
-            None => break,
-            Some(file) => {
-                println!("{}", &file.display());
-                if file.is_dir() {
-                    fs::read_dir(&file).map(|entries| {
-                        for entry in entries {
-                            entry.map(|entry| {
-                                q.push_back(entry.path());
-                            }).map_err(|err| {
-                                println_stderr!("bfind: {}", err.to_string());
-                            });
-                        }
-                    })
-                    .map_err(|err| {
-                        println_stderr!("bfind: {}: {}", file.display(), err.to_string());
+    while let Some(file) = q.pop_front() {
+        println!("{}", &file.display());
+        if file.is_dir() {
+            fs::read_dir(&file).map(|entries| {
+                for entry in entries {
+                    entry.map(|entry| {
+                        q.push_back(entry.path());
+                    }).map_err(|err| {
+                        println_stderr!("bfind: {}", err.to_string());
                     });
                 }
-            }
+            }).map_err(|err| {
+                println_stderr!("bfind: {}: {}", file.display(), err.to_string());
+            });
         }
     }
 }
