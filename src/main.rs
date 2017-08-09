@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 
 macro_rules! println_stderr(
     ($($arg:tt)*) => { {
-        match writeln!(&mut ::std::io::stderr(), $($arg)*) { Ok(_) => {}, Err(_) => {} }
+        let _ = writeln!(&mut ::std::io::stderr(), $($arg)*);
     } }
 );
 
