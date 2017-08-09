@@ -29,8 +29,6 @@ List a specific directory:
 
 ## Roadmap
 
-- Use three threads, one for listing files, one for filtering, and one for
-  printing
 - Be compliant with `find`'s command line arguments
 
 ## License
