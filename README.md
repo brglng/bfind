@@ -1,6 +1,6 @@
 # bfind
-A [GNU find](https://www.gnu.org/software/findutils/)-like tool, but uses [Iterative deepening depth-first search](https://en.wikipedia.org/wiki/Iterative_deepening_depth-first_search) instead
-of Depth First Search, written in [Rust](https://www.rust-lang.org/).
+A [GNU find](https://www.gnu.org/software/findutils/)-like tool, but uses Breadth-first search instead of Depth-first
+search, written in [Rust](https://www.rust-lang.org/).
 
 ## Build
 
