@@ -3,6 +3,9 @@ use std::io::prelude::*;
 use std::io::{BufReader, BufWriter};
 use std::fs::{File, OpenOptions};
 use std::path::PathBuf;
+use std::env;
+extern crate rand;
+use self::rand::Rng;
 
 // This queue stores the queue to a disk file if the queue is too large.
 pub struct PathQueue {
@@ -13,15 +16,20 @@ pub struct PathQueue {
 
 impl PathQueue {
     pub fn new() -> Result<PathQueue, io::Error> {
+        let mut rng = rand::thread_rng();
+        let mut tmpfilename: String = "bfind.tmp.".to_owned();
+        tmpfilename.push_str(&rng.gen::<u32>().to_string());
+        let full_tmpfilename = env::temp_dir().join(&tmpfilename);
+
         let fwrite = OpenOptions::new()
             .create(true)
             .truncate(true)
             .write(true)
-            .open("/tmp/bfind.tmp")?;
+            .open(&full_tmpfilename)?;
 
         let writer = BufWriter::new(fwrite);
 
-        let fread = OpenOptions::new().read(true).open("/tmp/bfind.tmp")?;
+        let fread = OpenOptions::new().read(true).open(&full_tmpfilename)?;
         let reader = BufReader::new(fread);
 
         Ok(PathQueue{writer: writer, reader: reader, len: 0})
