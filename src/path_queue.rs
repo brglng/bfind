@@ -1,42 +1,25 @@
 use std::io;
 use std::io::prelude::*;
 use std::io::{BufReader, BufWriter};
-use std::fs;
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::path::PathBuf;
-use std::env;
-extern crate rand;
-use self::rand::Rng;
+extern crate tempfile;
+use self::tempfile::NamedTempFile;
 
 // This queue stores the queue to a disk file if the queue is too large.
 pub struct PathQueue {
     writer:     BufWriter<File>,
     reader:     BufReader<File>,
     len:        usize,
-    filepath:   PathBuf
 }
 
 impl PathQueue {
-    pub fn new() -> Result<PathQueue, io::Error> {
-        let mut rng = rand::thread_rng();
-        let mut tmpfilename: String = "bfind.tmp.".to_owned();
-        tmpfilename.push_str(&rng.gen::<u32>().to_string());
-        let full_tmpfilename = env::temp_dir().join(&tmpfilename);
-
-        // eprintln!("using temp file: {}", &full_tmpfilename.display());
-
-        let fwrite = OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(&full_tmpfilename)?;
-
-        let writer = BufWriter::new(fwrite);
-
-        let fread = OpenOptions::new().read(true).open(&full_tmpfilename)?;
-        let reader = BufReader::new(fread);
-
-        Ok(PathQueue{writer: writer, reader: reader, len: 0, filepath: full_tmpfilename})
+    pub fn new() -> Result<Self, io::Error> {
+        let f = NamedTempFile::new()?;
+        let writer = BufWriter::new(f.reopen()?);
+        let reader = BufReader::new(f.reopen()?);
+        drop(f);
+        Ok(PathQueue{writer: writer, reader: reader, len: 0})
     }
 
     pub fn push(&mut self, path: PathBuf) -> Result<(), io::Error> {
@@ -67,18 +50,4 @@ impl PathQueue {
             Ok(None)
         }
     }
-
-    pub fn remove_temp_file(&mut self) -> Result<(), io::Error> {
-        fs::remove_file(&self.filepath).map_err(|err| {
-            eprintln!("failed to remove file: {}: {}", &self.filepath.display(), err);
-            err
-        })
-    }
 }
-
-impl Drop for PathQueue {
-    fn drop(&mut self) {
-        let _ = self.remove_temp_file();
-    }
-}
-
