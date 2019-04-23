@@ -24,7 +24,7 @@ fn walk_dir(root: String) {
                             q.push(entry.path()).unwrap();
                         }
                     }).map_err(|err| {
-                        eprintln!("bfind: {}", err);
+                        eprintln!("bfind: {}: {}", &file.display(), err);
                     });
                 }
             }).map_err(|err| {
