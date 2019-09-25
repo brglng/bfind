@@ -1,16 +1,14 @@
 use std::env;
 use std::fs;
+use std::fs::DirEntry;
 use std::path::PathBuf;
+use std::sync::mpsc::{sync_channel, SyncSender, Receiver};
+use std::thread;
+use std::time::Duration;
 
-mod path_queue;
-use path_queue::PathQueue;
-
-fn walk_dir(root: String) {
-    let mut q = PathQueue::new().unwrap();
-
-    q.push(PathBuf::from(root)).unwrap();
-
-    while let Some(file) = q.pop().unwrap() {
+fn worker(sender: SyncSender<PathBuf>, receiver: Receiver<PathBuf>) {
+    while let Ok(file) = receiver.recv_timeout(Duration::from_secs(2)) {
+        println!("{}", &file.display());
         if file.as_os_str().len() == 0 {
             break;
         }
@@ -18,10 +16,10 @@ fn walk_dir(root: String) {
         if file.is_dir() {
             let _ = fs::read_dir(&file).map(|entries| {
                 for entry in entries {
-                    let _ = entry.map(|entry| {
+                    let _ = entry.map(|entry: DirEntry| {
                         println!("{}", &entry.path().display());
                         if entry.path().is_dir() {
-                            q.push(entry.path()).unwrap();
+                            sender.send(entry.path()).unwrap();
                         }
                     }).map_err(|err| {
                         eprintln!("bfind: {}: {}", &file.display(), err);
@@ -39,50 +37,28 @@ fn walk_dir(root: String) {
     }
 }
 
-#[allow(dead_code)]
-fn dls(root: PathBuf, depth: usize) -> usize {
-    let mut num_all_children: usize = 0;
-
-    if depth == 0 {
-        num_all_children += 1;
-        println!("{}", &root.display());
-    } else {
-        if root.is_dir() {
-            let _ = fs::read_dir(&root).map(|entries| {
-                for entry in entries {
-                    let _ = entry.map(|entry| {
-                        num_all_children += dls(entry.path(), depth - 1);
-                    }).map_err(|err| {
-                        eprintln!("bfind: {}", &err);
-                    });
-                }
-            }).map_err(|err| {
-                eprintln!("bfind: {}: {}", &root.display(), &err);
-            });
-        }
-    }
-
-    return num_all_children;
-}
-
-#[allow(dead_code)]
-fn iddfs(root: String, min_depth: usize, max_depth: usize) {
-    for i in min_depth..max_depth {
-        if dls(PathBuf::from(&root), i) == 0 {
-            break;
-        }
-    }
-}
-
 fn main() {
     let args: Vec<String> = env::args().collect();
 
     let root = if args.len() > 1 {
-        args[1].clone()
+        &args[1]
     } else {
-        String::from(".")
+        "."
     };
 
-    walk_dir(root);
-    // iddfs(root, 0, 50);
+    let (sender1, receiver1) = sync_channel(8192);
+    let (sender2, receiver2) = sync_channel(8192);
+
+    sender1.send(PathBuf::from(root)).unwrap();
+
+    let t1 = thread::spawn(move|| {
+        worker(sender1, receiver2);
+    });
+
+    let t2 = thread::spawn(move|| {
+        worker(sender2, receiver1);
+    });
+
+    t1.join().unwrap();
+    t2.join().unwrap();
 }
