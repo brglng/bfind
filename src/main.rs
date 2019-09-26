@@ -1,39 +1,29 @@
 use std::env;
 use std::fs;
-use std::fs::DirEntry;
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Sender, Receiver};
 use std::thread;
 use std::time::Duration;
 
 fn worker(sender: Sender<PathBuf>, receiver: Receiver<PathBuf>) {
-    while let Ok(file) = receiver.recv_timeout(Duration::from_secs(1)) {
-        println!("{}", &file.display());
-        if file.as_os_str().len() == 0 {
-            break;
-        }
-
-        if file.is_dir() {
-            let _ = fs::read_dir(&file).map(|entries| {
-                for entry in entries {
-                    let _ = entry.map(|entry: DirEntry| {
-                        println!("{}", &entry.path().display());
-                        if entry.path().is_dir() {
-                            sender.send(entry.path()).unwrap();
-                        }
-                    }).map_err(|err| {
-                        eprintln!("bfind: {}: {}", &file.display(), err);
-                    });
-                }
-            }).map_err(|err| {
-                eprintln!("bfind: {}: {}", &file.display(), err);
-            });
-        } else {
-            // There are some cases in which entry.path().is_dir() above
-            // returned true but here file.is_dir() returned false. This often
-            // occurs when the file is a symlink to a directory but we don't
-            // have access to it. Don't know why though. Just ignore it.
-        }
+    while let Ok(file) = receiver.recv_timeout(Duration::from_millis(1000)) {
+        let entries = fs::read_dir(&file);
+        if let Ok(entries) = entries {
+            println!("{}", file.display());
+            for entry in entries {
+                if let Ok(entry) = entry {
+                    let path = entry.path();
+                    println!("{}", path.display());
+                    if path.is_dir() {
+                        sender.send(path).unwrap();
+                    }
+                } else if let Err(e) = entry {
+                    eprintln!("bfind: {}: {}", file.display(), e);
+                };
+            }
+        } else if let Err(e) = entries {
+            eprintln!("bfind: {}: {}", file.display(), e);
+        };
     }
 }
 
