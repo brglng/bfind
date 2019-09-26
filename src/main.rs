@@ -2,12 +2,12 @@ use std::env;
 use std::fs;
 use std::fs::DirEntry;
 use std::path::PathBuf;
-use std::sync::mpsc::{sync_channel, SyncSender, Receiver};
+use std::sync::mpsc::{channel, Sender, Receiver};
 use std::thread;
 use std::time::Duration;
 
-fn worker(sender: SyncSender<PathBuf>, receiver: Receiver<PathBuf>) {
-    while let Ok(file) = receiver.recv_timeout(Duration::from_secs(2)) {
+fn worker(sender: Sender<PathBuf>, receiver: Receiver<PathBuf>) {
+    while let Ok(file) = receiver.recv_timeout(Duration::from_secs(1)) {
         println!("{}", &file.display());
         if file.as_os_str().len() == 0 {
             break;
@@ -46,8 +46,8 @@ fn main() {
         "."
     };
 
-    let (sender1, receiver1) = sync_channel(8192);
-    let (sender2, receiver2) = sync_channel(8192);
+    let (sender1, receiver1) = channel();
+    let (sender2, receiver2) = channel();
 
     sender1.send(PathBuf::from(root)).unwrap();
 
