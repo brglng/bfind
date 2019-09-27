@@ -37,15 +37,11 @@ fn walk_dir(prog: &str, root: &str, allow_dot: bool, follow_links: bool) {
                         continue;
                     }
 
-                    if follow_links || !is_link {
-                        if allow_dot || !is_dot {
-                            println!("{}", path.display());
-                            if path.is_dir() {
-                                q.push(path).unwrap();
-                            }
+                    if (follow_links || !is_link) && (allow_dot || !is_dot) {
+                        println!("{}", path.display());
+                        if path.is_dir() {
+                            q.push(path).unwrap();
                         }
-                    } else {
-                        eprintln!("{}: {}: is a link", prog, path.display());
                     }
                 } else if let Err(e) = entry {
                     eprintln!("{}: {}: {}", prog, file.display(), e);
@@ -58,7 +54,7 @@ fn walk_dir(prog: &str, root: &str, allow_dot: bool, follow_links: bool) {
 }
 
 fn print_help(prog: &str) {
-    println!("{}: [-H] [-L] DIR", prog);
+    println!("{}: [-H] [-L] [-P] [-D debugopts] [-Olevel] [starting-point...] [expression]", prog);
     exit(0);
 }
 
