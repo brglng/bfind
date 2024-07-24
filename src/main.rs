@@ -31,7 +31,7 @@ fn depth_first_traverse(prog: &str, root: &Path, allow_dot: bool, follow_links: 
                             depth_first_traverse(prog, &entry.path(), allow_dot, follow_links, iter_depth, depth + 1);
                         }
                     } else {
-                        println!("{}", depth, iter_depth, path.display());
+                        println!("{}", path.display());
                     }
                 }
             } else if let Err(e) = entry {
