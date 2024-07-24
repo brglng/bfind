@@ -26,9 +26,9 @@ List a specific directory:
 
     $ bfind /path/to/directory
 
-## Roadmap
+## TODO
 
-- Be compliant with `find`'s command line arguments
+- Design a simple and powerful command line syntax.
 
 ## License
 
