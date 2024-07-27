@@ -77,6 +77,13 @@ fn iterative_deepening(prog: &str, mut roots: Vec<String>, allow_dot: bool, foll
     }
 }
 
+#[derive(PartialEq, Eq)]
+enum Verb {
+    Print,
+    Exec
+}
+
+#[derive(PartialEq, Eq)]
 enum CliState {
     Options,
     Action,
@@ -96,6 +103,7 @@ fn main() {
     let mut roots: Vec<String> = vec![];
     let mut max_depth = i32::MAX;
     let mut state = CliState::Options;
+    let mut verb = Verb::Print;
     let mut action_tokens = Vec::new();
     let mut expr_tokens: Vec<String> = Vec::new();
 
@@ -124,7 +132,11 @@ fn main() {
                             exit(1);
                         }
                     }
-                } else if arg == "print" || arg == "exec" {
+                } else if arg == "print" {
+                    verb = Verb::Print;
+                    state = CliState::Action;
+                } else if arg == "exec" {
+                    verb = Verb::Exec;
                     state = CliState::Action;
                 } else if arg == "if" {
                     state = CliState::Expr;
@@ -149,7 +161,4 @@ fn main() {
     }
 
     iterative_deepening(prog, roots, allow_dot, follow_links, max_depth);
-
-    println!("action: {}", action_tokens.join(" "));
-    println!("expr: {}", expr_tokens.join(" "));
 }
