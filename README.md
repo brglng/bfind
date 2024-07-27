@@ -36,6 +36,36 @@ List a specific directory:
 $ bfind /path/to/directory
 ```
 
+Find a file with regex:
+
+```sh
+$ bfind . if match 'foo.*'
+```
+
+Find a file with glob:
+
+```sh
+$ bfind . if glob 'foo*'
+```
+
+Combining conditions:
+
+```sh
+$ bfind . if glob 'foo*' and type dir
+```
+
+Print with formatting:
+
+```sh
+$ bfind . print 'file: {name:10}, {size:>10} bytes' if glob 'foo*' and size-lt 1MiB
+```
+
+Execute a command:
+
+```sh
+$ bfind . exec ''
+```
+
 ## TODO
 
 - Design a simple and powerful command line syntax.
