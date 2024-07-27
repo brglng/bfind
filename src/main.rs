@@ -1,10 +1,12 @@
 use std::env;
+use std::collections::VecDeque;
 use std::fs;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::process::exit;
 
-fn depth_first_traverse(prog: &str, root: &Path, allow_dot: bool, follow_links: bool, iter_depth: i32, depth: i32) {
+fn depth_first_traverse(prog: &str, root: &Path, allow_dot: bool, follow_links: bool, iter_depth: i32, depth: i32) -> bool {
+    let mut has_next_level = false;
     let entries = fs::read_dir(root);
     if let Ok(entries) = entries {
         for entry in entries {
@@ -28,9 +30,14 @@ fn depth_first_traverse(prog: &str, root: &Path, allow_dot: bool, follow_links: 
                 if (follow_links || !is_link) && (allow_dot || !is_dot) {
                     if depth < iter_depth {
                         if path.is_dir() {
-                            depth_first_traverse(prog, &entry.path(), allow_dot, follow_links, iter_depth, depth + 1);
+                            if depth_first_traverse(prog, &entry.path(), allow_dot, follow_links, iter_depth, depth + 1) {
+                                has_next_level = true;
+                            }
                         }
                     } else {
+                        if path.is_dir() {
+                            has_next_level = true;
+                        }
                         println!("{}", path.display());
                     }
                 }
@@ -42,43 +49,107 @@ fn depth_first_traverse(prog: &str, root: &Path, allow_dot: bool, follow_links: 
     } else if let Err(e) = entries {
         eprintln!("{}: {}: {}", prog, root.display(), e);
     }
+    return has_next_level;
 }
 
-fn iterative_deepening(prog: &str, root: &Path, allow_dot: bool, follow_links: bool, max_depth: i32) {
-    for depth in 1..=max_depth {
-        depth_first_traverse(prog, root, allow_dot, follow_links, depth, 1);
+fn iterative_deepening(prog: &str, mut roots: Vec<String>, allow_dot: bool, follow_links: bool, max_depth: i32) {
+    if roots.is_empty() {
+        for depth in 1..=max_depth {
+            if !depth_first_traverse(prog, Path::new("."), allow_dot, follow_links, depth, 1) {
+                break;
+            }
+        }
+    } else {
+        for depth in 1..=max_depth {
+            let mut i = 0 as usize;
+            while i < roots.len() {
+                if !depth_first_traverse(prog, Path::new(unsafe { &roots.get_unchecked(i) }), allow_dot, follow_links, depth, 1) {
+                    roots.remove(i);
+                    if roots.is_empty() {
+                        return;
+                    } else {
+                        continue;
+                    }
+                }
+                i += 1;
+            }
+        }
     }
 }
 
+enum CliState {
+    Options,
+    Action,
+    Expr,
+}
+
 fn print_help(prog: &str) {
-    println!("{}: [-H] [-L] [starting-point...] [expression]", prog);
+    println!("{}: [-H] [-L] [-d DEPTH] [DIR ...] [VERB ...] [if EXPR ...]", prog);
     exit(0);
 }
 
 fn main() {
-    let mut args: Vec<String> = env::args().collect();
+    let mut args: VecDeque<String> = env::args().collect();
 
     let mut allow_dot = false;
     let mut follow_links = false;
-    let mut root = String::from(".");
+    let mut roots: Vec<String> = vec![];
+    let mut max_depth = i32::MAX;
+    let mut state = CliState::Options;
+    let mut action_tokens = Vec::new();
+    let mut expr_tokens: Vec<String> = Vec::new();
 
-    let prog_path = args.remove(0);
+    let prog_path = args.pop_front().unwrap();
     let prog = prog_path.rsplit('/').nth_back(0).unwrap();
 
-    for arg in args {
-        if arg == "-H" {
-            allow_dot = true;
-        } else if arg == "-L" {
-            follow_links = true;
-        } else if arg == "-h" || arg == "--help" {
-            print_help(prog);
-        } else if arg.len() > 1 && arg.starts_with('-') {
-            eprintln!("{}: unknown argument: {}", &prog, &arg);
-            exit(-1);
-        } else {
-            root.clone_from(&arg);
+    while let Some(arg) = args.pop_front() {
+        match state {
+            CliState::Options => {
+                if arg == "-H" {
+                    allow_dot = true;
+                } else if arg == "-L" {
+                    follow_links = true;
+                } else if arg == "-h" || arg == "--help" {
+                    print_help(prog);
+                } else if arg == "-d" || arg == "--depth" {
+                    if let Some(depth_str) = args.pop_front() {
+                        if let Ok(depth) = depth_str.parse::<i32>() {
+                            if depth < 1 {
+                                eprintln!("{}: depth must be > 0", prog);
+                                exit(1);
+                            }
+                            max_depth = depth;
+                        } else {
+                            eprintln!("{}: unable to parse \"{}\" as i32", prog, &depth_str);
+                            exit(1);
+                        }
+                    }
+                } else if arg == "print" || arg == "exec" {
+                    state = CliState::Action;
+                } else if arg == "if" {
+                    state = CliState::Expr;
+                } else if arg.starts_with('-') {
+                    eprintln!("{}: unknown argument: {}", prog, &arg);
+                    exit(-1);
+                } else {
+                    roots.push(arg);
+                }
+            },
+            CliState::Action => {
+                if arg == "if" {
+                    state = CliState::Expr;
+                } else {
+                    action_tokens.push(arg);
+                }
+            },
+            CliState::Expr => {
+                expr_tokens.push(arg);
+            },
         }
     }
 
-    iterative_deepening(prog, Path::new(&root), allow_dot, follow_links, 100);
+    iterative_deepening(prog, roots, allow_dot, follow_links, max_depth);
+
+    println!("action: {}", action_tokens.join(" "));
+    println!("expr: {}", expr_tokens.join(" "));
 }

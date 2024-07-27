@@ -4,15 +4,21 @@ search, written in [Rust](https://www.rust-lang.org/).
 
 ## Build
 
-    $ cargo build
+```sh
+$ cargo build
+```
 
 Or for the release version
 
-    $ cargo build --release
+```sh
+$ cargo build --release
+```
 
 ## Install
 
-    $ cargo install
+```sh
+$ cargo install
+```
 
 ## Usage
 
@@ -20,11 +26,15 @@ Currently, only basic directory listing is implemented.
 
 List current working directory:
 
-    $ bfind
+```sh
+$ bfind
+```
 
 List a specific directory:
 
-    $ bfind /path/to/directory
+```sh
+$ bfind /path/to/directory
+```
 
 ## TODO
 
