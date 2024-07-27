@@ -63,12 +63,13 @@ $ bfind . print 'file: {name:10}, {size:>10} bytes' if glob 'foo*' and size-lt 1
 Execute a command:
 
 ```sh
-$ bfind . exec ''
+$ bfind . exec cat '{name}' if glob 'foo*.txt'
 ```
 
 ## TODO
 
 - Design a simple and powerful command line syntax.
+- Implement the command line interface.
 
 ## License
 
