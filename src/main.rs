@@ -91,7 +91,7 @@ enum CliState {
 }
 
 fn print_help(prog: &str) {
-    println!("{}: [-H] [-L] [-d DEPTH] [DIR ...] [VERB ...] [if EXPR ...]", prog);
+    println!("{}: [-H] [-L] [-d DEPTH] [DIR ...] [VERB ...] [-- EXPR ...]", prog);
     exit(0);
 }
 
@@ -138,17 +138,17 @@ fn main() {
                 } else if arg == "exec" {
                     verb = Verb::Exec;
                     state = CliState::Action;
-                } else if arg == "if" {
+                } else if arg == "--" {
                     state = CliState::Expr;
                 } else if arg.starts_with('-') {
-                    eprintln!("{}: unknown argument: {}", prog, &arg);
+                    eprintln!("{}: unrecognized argument: {}", prog, &arg);
                     exit(1);
                 } else {
                     roots.push(arg);
                 }
             },
             CliState::Action => {
-                if arg == "if" {
+                if arg == "--" {
                     state = CliState::Expr;
                 } else {
                     action_tokens.push(arg);
