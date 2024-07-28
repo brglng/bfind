@@ -1,5 +1,7 @@
 # bfind
 
+![example workflow](https://github.com/brglng/bfind/actions/workflows/rust.yml/badge.svg)
+
 A [GNU find](https://www.gnu.org/software/findutils/)-like tool, but uses breadth-first traversal instead of depth-first traversal, written in [Rust](https://www.rust-lang.org/).
 
 **NO WARRANTY:** This is only a tool for my personal use. I have no plan to improve its performance or features, neither are issues guaranteed to get fixed, but PR is welcome.
