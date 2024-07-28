@@ -43,7 +43,7 @@ $ bfind /path/to/directory
 Find a file with regular expression:
 
 ```sh
-$ bfind . -- name match 'foo.*'
+$ bfind . -- name =~ 'foo.*'
 ```
 
 Find a file with glob:
@@ -67,7 +67,7 @@ $ bfind . print 'file: {name:10}, {size:>10} bytes' -- name glob 'foo*' and size
 Execute a command:
 
 ```sh
-$ bfind . exec cat '{name}' -- name glob 'foo*.txt'
+$ bfind . exec cat '{fullpath}' -- name glob 'foo*.txt'
 ```
 
 ## TODO
