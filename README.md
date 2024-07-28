@@ -1,9 +1,8 @@
 # bfind
 
-A [GNU find](https://www.gnu.org/software/findutils/)-like tool, but uses Breadth-first search instead of Depth-first
-search, written in [Rust](https://www.rust-lang.org/).
+A [GNU find](https://www.gnu.org/software/findutils/)-like tool, but uses breadth-first traversal instead of depth-first traversal, written in [Rust](https://www.rust-lang.org/).
 
-**NO WARRANTY:** This is only a tool for my personal use. I have no plan to improve its performance or features, but PR with good quality is welcome.
+**NO WARRANTY:** This is only a tool for my personal use. I have no plan to improve its performance or features, neither are issues guaranteed get fixed, but PR's with good quality are welcome.
 
 ## Build
 
