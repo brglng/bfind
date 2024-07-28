@@ -43,7 +43,7 @@ $ bfind /path/to/directory
 Find a file with regular expression:
 
 ```sh
-$ bfind . -- name =~ 'foo.*'
+$ bfind . -- name match 'foo.*'
 ```
 
 Find a file with glob:
@@ -55,7 +55,7 @@ $ bfind . -- name glob 'foo*'
 Combining conditions:
 
 ```sh
-$ bfind . -- name glob 'foo*' and type == dir
+$ bfind . -- name glob 'foo*' and type is dir
 ```
 
 Print with formatting:
