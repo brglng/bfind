@@ -36,34 +36,34 @@ List a specific directory:
 $ bfind /path/to/directory
 ```
 
-Find a file with regex:
+Find a file with regular expression:
 
 ```sh
-$ bfind . if match 'foo.*'
+$ bfind . -- name match 'foo.*'
 ```
 
 Find a file with glob:
 
 ```sh
-$ bfind . if glob 'foo*'
+$ bfind . -- name glob 'foo*'
 ```
 
 Combining conditions:
 
 ```sh
-$ bfind . if glob 'foo*' and type dir
+$ bfind . -- name glob 'foo*' and type == dir
 ```
 
 Print with formatting:
 
 ```sh
-$ bfind . print 'file: {name:10}, {size:>10} bytes' if glob 'foo*' and size-lt 1MiB
+$ bfind . print 'file: {name:10}, {size:>10} bytes' -- name glob 'foo*' and size gt 1MiB
 ```
 
 Execute a command:
 
 ```sh
-$ bfind . exec cat '{name}' if glob 'foo*.txt'
+$ bfind . exec cat '{name}' -- name glob 'foo*.txt'
 ```
 
 ## TODO
