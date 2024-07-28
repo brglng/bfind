@@ -142,7 +142,7 @@ fn main() {
                     state = CliState::Expr;
                 } else if arg.starts_with('-') {
                     eprintln!("{}: unknown argument: {}", prog, &arg);
-                    exit(-1);
+                    exit(1);
                 } else {
                     roots.push(arg);
                 }
