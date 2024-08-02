@@ -1,49 +1,42 @@
 use std::env;
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::fs;
-use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::process::exit;
 
-fn depth_first_traverse(prog: &str, root: &Path, allow_dot: bool, follow_links: bool, iter_depth: i32, depth: i32) -> bool {
+fn depth_first_traverse(prog: &str, root: &Path, allow_hidden: bool, follow_links: bool, iter_depth: i32, depth: i32, ignores: &HashSet<String>) -> bool {
     let mut has_next_level = false;
     let entries = fs::read_dir(root);
     if let Ok(entries) = entries {
         for entry in entries {
             if let Ok(entry) = entry {
                 let path = entry.path();
-
-                let is_link = path.read_link().is_ok();
-                let mut is_dot = false;
-
-                let file_name = path.file_name();
-                if let Some(file_name) = file_name {
-                    let file_name_bytes = file_name.as_bytes();
-                    if !file_name_bytes.is_empty() && file_name_bytes[0] == b'.' {
-                        is_dot = true;
-                    }
-                } else {
-                    eprintln!("{}: {}: cannot get filename", prog, path.display());
-                    continue;
-                }
-
-                if (follow_links || !is_link) && (allow_dot || !is_dot) {
-                    if depth < iter_depth {
-                        if path.is_dir() {
-                            if depth_first_traverse(prog, &entry.path(), allow_dot, follow_links, iter_depth, depth + 1) {
-                                has_next_level = true;
+                if let Some(file_name) = path.file_name() {
+                    if let Some(file_name_str) = file_name.to_str() {
+                        if let Some(first_char) = file_name_str.chars().next() {
+                            let is_hidden = first_char == '.';
+                            let is_link = path.read_link().is_ok();
+                            if (follow_links || !is_link) && (allow_hidden || !is_hidden) && ignores.get(file_name_str).is_none() {
+                                if depth < iter_depth {
+                                    if path.is_dir() && depth_first_traverse(prog, &entry.path(), allow_hidden, follow_links, iter_depth, depth + 1, ignores) {
+                                        has_next_level = true;
+                                    }
+                                } else {
+                                    if path.is_dir() {
+                                        has_next_level = true;
+                                    }
+                                    println!("{}", path.display());
+                                }
                             }
                         }
                     } else {
-                        if path.is_dir() {
-                            has_next_level = true;
-                        }
-                        println!("{}", path.display());
+                        eprintln!("{}: {}: cannot read filename", prog, path.display());
                     }
+                } else {
+                    eprintln!("{}: {}: cannot read filename", prog, path.display());
                 }
             } else if let Err(e) = entry {
                 eprintln!("{}: {}: {}", prog, root.display(), e);
-                continue;
             }
         }
     } else if let Err(e) = entries {
@@ -52,18 +45,18 @@ fn depth_first_traverse(prog: &str, root: &Path, allow_dot: bool, follow_links: 
     return has_next_level;
 }
 
-fn iterative_deepening(prog: &str, mut roots: Vec<String>, allow_dot: bool, follow_links: bool, max_depth: i32) {
+fn iterative_deepening(prog: &str, mut roots: Vec<String>, allow_dot: bool, follow_links: bool, max_depth: i32, ignores: HashSet<String>) {
     if roots.is_empty() {
         for depth in 1..=max_depth {
-            if !depth_first_traverse(prog, Path::new("."), allow_dot, follow_links, depth, 1) {
+            if !depth_first_traverse(prog, Path::new("."), allow_dot, follow_links, depth, 1, &ignores) {
                 break;
             }
         }
     } else {
         for depth in 1..=max_depth {
-            let mut i = 0 as usize;
+            let mut i = 0_usize;
             while i < roots.len() {
-                if !depth_first_traverse(prog, Path::new(unsafe { &roots.get_unchecked(i) }), allow_dot, follow_links, depth, 1) {
+                if !depth_first_traverse(prog, Path::new(&roots[i]), allow_dot, follow_links, depth, 1, &ignores) {
                     roots.remove(i);
                     if roots.is_empty() {
                         return;
@@ -91,7 +84,7 @@ enum CliState {
 }
 
 fn print_help(prog: &str) {
-    println!("{}: [-H] [-L] [-d DEPTH] [DIR ...] [VERB ...] [-- EXPR ...]", prog);
+    println!("{}: [-H] [-L] [-d DEPTH] [-I IGNORE] [DIR ...] [VERB ...] [-- EXPR ...]", prog);
     exit(0);
 }
 
@@ -100,8 +93,9 @@ fn main() {
 
     let mut allow_dot = false;
     let mut follow_links = false;
-    let mut roots: Vec<String> = vec![];
+    let mut roots: Vec<String> = Vec::new();
     let mut max_depth = i32::MAX;
+    let mut ignores: HashSet<String> = HashSet::new();
     let mut state = CliState::Options;
     let mut verb = Verb::Print;
     let mut action_tokens = Vec::new();
@@ -131,6 +125,16 @@ fn main() {
                             eprintln!("{}: unable to parse \"{}\" as i32", prog, &depth_str);
                             exit(1);
                         }
+                    } else {
+                        eprintln!("{}: missing argument to -d", prog);
+                        exit(1);
+                    }
+                } else if arg == "-I" || arg == "--ignore" {
+                    if let Some(ignore) = args.pop_front() {
+                        ignores = ignore.split(',').map(|s| { s.to_string() }).collect();
+                    } else {
+                        eprintln!("{}: missing argument to -I", prog);
+                        exit(1);
                     }
                 } else if arg == "print" {
                     verb = Verb::Print;
@@ -160,5 +164,5 @@ fn main() {
         }
     }
 
-    iterative_deepening(prog, roots, allow_dot, follow_links, max_depth);
+    iterative_deepening(prog, roots, allow_dot, follow_links, max_depth, ignores);
 }
