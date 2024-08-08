@@ -20,7 +20,8 @@ fn breadth_first_traverse(prog: &str, roots: Vec<String>, allow_hidden: bool, fo
         }
     }
 
-    while let Ok(path) = q.pop() {
+    loop {
+        let path = q.pop()?;
         if !follow_links && path.is_symlink() {
             continue;
         }
