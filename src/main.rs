@@ -73,9 +73,7 @@ fn breadth_first_traverse(prog: &str, roots: Vec<String>, allow_hidden: bool, fo
                             }
                             println!("{}", path.display());
                             if path.is_dir() {
-                                if let Err(e) = q.push(path) {
-                                    eprintln!("{}: {}", prog, e);
-                                };
+                                q.push(path)?;
                             }
                         } else {
                             eprintln!("{}: {}: cannot read filename", prog, path.display());
