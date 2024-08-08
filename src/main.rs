@@ -42,7 +42,7 @@ fn breadth_first_traverse(prog: &str, roots: Vec<String>, allow_hidden: bool, fo
                     eprintln!("{}: {}: cannot read filename", prog, path.display())
                 }
             } else {
-                // path ends with ".."
+                unreachable!("path ends with \"..\", which should not happen");
             }
         }
 
@@ -79,6 +79,8 @@ fn breadth_first_traverse(prog: &str, roots: Vec<String>, allow_hidden: bool, fo
                         } else {
                             eprintln!("{}: {}: cannot read filename", prog, path.display());
                         }
+                    } else {
+                        unreachable!("path ends with \"..\", which should not happen");
                     }
                 } else {
                     eprintln!("{}: {}: {}", prog, path.display(), entry.unwrap_err());
