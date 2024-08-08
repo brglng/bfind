@@ -1,10 +1,10 @@
-#![allow(dead_code)]
-
 use std::error;
+use std::ffi::OsStr;
 use std::fmt;
 use std::io;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::fs::File;
+use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::sync::mpsc::{Sender, Receiver};
@@ -76,20 +76,22 @@ impl TempfilePathQueue {
     pub fn len(&self) -> usize { self.len }
 
     pub fn push(&mut self, path: PathBuf) -> Result<()> {
-        writeln!(self.writer, "{}", &path.display())?;
+        self.writer.write_all(path.as_os_str().as_bytes())?;
+        self.writer.write_all(b"\0")?;
         self.len += 1;
-        return Ok(());
+        Ok(())
     }
 
     pub fn pop(&mut self) -> Result<PathBuf> {
-        let mut buffer = String::new();
-        let len = self.reader.read_line(&mut buffer)?;
-        if len == 0 {
+        let mut buffer = vec![];
+        let num_bytes = self.reader.read_until(b'\0', &mut buffer)?;
+        if num_bytes == 0 {
             self.writer.flush()?;
-            self.reader.read_line(&mut buffer)?;
+            self.reader.read_until(b'\0', &mut buffer)?;
         }
+        buffer.pop();
         self.len -= 1;
-        Ok(PathBuf::from(buffer.trim_end()))
+        Ok(PathBuf::from(OsStr::from_bytes(&buffer)))
     }
 }
 
@@ -127,13 +129,14 @@ enum Storage {
 
 // This queue stores the queue to a disk file if the queue is too large.
 pub struct PathQueue {
-    q:              Storage,
-    max_mem_len:    usize,
+    q:                          Storage,
+    mem_to_tempfile_thresh:     usize,
+    tempfile_to_mem_thresh:     usize,
 }
 
 impl PathQueue {
-    pub fn new(max_mem_len: usize) -> Self {
-        PathQueue{ q: Storage::Mem(MemPathQueue::new()), max_mem_len }
+    pub fn new(mem_to_tempfile_thresh: usize, tempfile_to_mem_thresh: usize) -> Self {
+        PathQueue{ q: Storage::Mem(MemPathQueue::new()), mem_to_tempfile_thresh, tempfile_to_mem_thresh }
     }
 
     pub fn len(&self) -> usize {
@@ -162,7 +165,7 @@ impl PathQueue {
     pub fn push(&mut self, path: PathBuf) -> Result<()> {
         match self.q {
             Storage::Mem(ref mut memq) => {
-                if memq.len() < self.max_mem_len {
+                if memq.len() < self.mem_to_tempfile_thresh {
                     return memq.push(path);
                 } else {
                     let mut tempfileq = TempfilePathQueue::new()?;
@@ -187,7 +190,7 @@ impl PathQueue {
             },
             Storage::Tempfile(ref mut tempfileq) => {
                 let path = tempfileq.pop()?;
-                if tempfileq.len() < self.max_mem_len / 2 {
+                if tempfileq.len() < self.tempfile_to_mem_thresh {
                     let mut memq = MemPathQueue::new();
                     for _ in 0..tempfileq.len() {
                         memq.push(tempfileq.pop()?)?;
@@ -207,7 +210,7 @@ mod tests {
 
     #[test]
     fn path_queue() -> Result<()> {
-        let mut q = PathQueue::new(4);
+        let mut q = PathQueue::new(4, 2);
         q.push(PathBuf::from("a/b"))?;
         q.push(PathBuf::from("b/c"))?;
         q.push(PathBuf::from("c/d"))?;

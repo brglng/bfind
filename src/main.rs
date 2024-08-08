@@ -1,73 +1,100 @@
 use std::env;
 use std::collections::{HashSet, VecDeque};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::exit;
 
-fn depth_first_traverse(prog: &str, root: &Path, allow_hidden: bool, follow_links: bool, iter_depth: i32, depth: i32, ignores: &HashSet<String>) -> bool {
-    let mut has_next_level = false;
-    let entries = fs::read_dir(root);
-    if let Ok(entries) = entries {
-        for entry in entries {
-            if let Ok(entry) = entry {
-                let path = entry.path();
-                if let Some(file_name) = path.file_name() {
-                    if let Some(file_name_str) = file_name.to_str() {
-                        if let Some(first_char) = file_name_str.chars().next() {
-                            let is_hidden = first_char == '.';
-                            let is_link = path.read_link().is_ok();
-                            if (follow_links || !is_link) && (allow_hidden || !is_hidden) && ignores.get(file_name_str).is_none() {
-                                if depth < iter_depth {
-                                    if path.is_dir() && depth_first_traverse(prog, &entry.path(), allow_hidden, follow_links, iter_depth, depth + 1, ignores) {
-                                        has_next_level = true;
-                                    }
-                                } else {
-                                    if path.is_dir() {
-                                        has_next_level = true;
-                                    }
-                                    println!("{}", path.display());
-                                }
+mod path_queue;
+use path_queue::PathQueue;
+
+fn breadth_first_traverse(prog: &str, roots: Vec<String>, allow_hidden: bool, follow_links: bool, ignores: &HashSet<String>) -> path_queue::Result<()> {
+    let dotdir = Path::new(".");
+
+    let mut q = PathQueue::new(1024 * 1024, 1024 * 512);
+
+    if roots.is_empty() {
+        q.push(PathBuf::from("."))?;
+    } else {
+        for root in roots {
+            q.push(PathBuf::from(root))?;
+        }
+    }
+
+    while let Ok(path) = q.pop() {
+        if !follow_links && path.is_symlink() {
+            continue;
+        }
+        if path != dotdir {
+            if let Some(file_name) = path.file_name() {
+                if let Some(file_name) = file_name.to_str() {
+                    if !allow_hidden {
+                        if let Some(first_char) = file_name.chars().next() {
+                            if first_char == '.' {
+                                continue;
                             }
                         }
-                    } else {
-                        eprintln!("{}: {}: cannot read filename", prog, path.display());
                     }
-                } else {
-                    eprintln!("{}: {}: cannot read filename", prog, path.display());
-                }
-            } else if let Err(e) = entry {
-                eprintln!("{}: {}: {}", prog, root.display(), e);
-            }
-        }
-    } else if let Err(e) = entries {
-        eprintln!("{}: {}: {}", prog, root.display(), e);
-    }
-    return has_next_level;
-}
-
-fn iterative_deepening(prog: &str, mut roots: Vec<String>, allow_dot: bool, follow_links: bool, max_depth: i32, ignores: HashSet<String>) {
-    if roots.is_empty() {
-        for depth in 1..=max_depth {
-            if !depth_first_traverse(prog, Path::new("."), allow_dot, follow_links, depth, 1, &ignores) {
-                break;
-            }
-        }
-    } else {
-        for depth in 1..=max_depth {
-            let mut i = 0_usize;
-            while i < roots.len() {
-                if !depth_first_traverse(prog, Path::new(&roots[i]), allow_dot, follow_links, depth, 1, &ignores) {
-                    roots.remove(i);
-                    if roots.is_empty() {
-                        return;
-                    } else {
+                    if ignores.get(file_name).is_some() {
                         continue;
                     }
+                } else {
+                    eprintln!("{}: {}: cannot read filename", prog, path.display())
                 }
-                i += 1;
+            } else {
+                // path ends with ".."
             }
         }
+
+        let entries = fs::read_dir(&path);
+        if let Ok(entries) = entries {
+            for entry in entries {
+                if let Ok(entry) = entry {
+                    let mut path = entry.path();
+                    if follow_links && path.is_symlink() {
+                        let p = path.read_link();
+                        if let Ok(p) = p {
+                            path = p;
+                        } else {
+                            eprintln!("{}: {}: {}", prog, path.display(), p.unwrap_err());
+                            continue;
+                        }
+                    }
+                    if let Some(file_name) = path.file_name() {
+                        if let Some(file_name) = file_name.to_str() {
+                            if !allow_hidden {
+                                if let Some(first_char) = file_name.chars().next() {
+                                    if first_char == '.' {
+                                        continue;
+                                    }
+                                }
+                            }
+                            if ignores.get(file_name).is_some() {
+                                continue;
+                            }
+                            println!("{}", path.display());
+                            if path.is_dir() {
+                                if let Err(e) = q.push(path) {
+                                    eprintln!("{}: {}", prog, e);
+                                };
+                            }
+                        } else {
+                            eprintln!("{}: {}: cannot read filename", prog, path.display());
+                        }
+                    }
+                } else {
+                    eprintln!("{}: {}: {}", prog, path.display(), entry.unwrap_err());
+                }
+            }
+        } else {
+            eprintln!("{}: {}: {}", prog, path.display(), entries.unwrap_err());
+        }
+
+        if q.len() == 0 {
+            break;
+        }
     }
+
+    Ok(())
 }
 
 #[derive(PartialEq, Eq)]
@@ -164,5 +191,7 @@ fn main() {
         }
     }
 
-    iterative_deepening(prog, roots, allow_dot, follow_links, max_depth, ignores);
+    if let Err(e) = breadth_first_traverse(prog, roots, allow_dot, follow_links, &ignores) {
+        eprintln!("{}: {}", prog, e);
+    }
 }
