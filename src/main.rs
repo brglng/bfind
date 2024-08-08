@@ -9,6 +9,7 @@ use path_queue::PathQueue;
 
 fn breadth_first_traverse(prog: &str, roots: Vec<String>, allow_hidden: bool, follow_links: bool, ignores: &HashSet<String>) -> path_queue::Result<()> {
     let dotdir = Path::new(".");
+    let dotdotdir = Path::new("..");
 
     let mut q = PathQueue::new(1024 * 1024, 1024 * 512);
 
@@ -25,7 +26,7 @@ fn breadth_first_traverse(prog: &str, roots: Vec<String>, allow_hidden: bool, fo
         if !follow_links && path.is_symlink() {
             continue;
         }
-        if path != dotdir {
+        if path != dotdir && path != dotdotdir {
             if let Some(file_name) = path.file_name() {
                 if let Some(file_name) = file_name.to_str() {
                     if !allow_hidden {
