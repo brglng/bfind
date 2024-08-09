@@ -3,11 +3,23 @@ use std::collections::{HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::exit;
+use thiserror::Error;
 
 mod path_queue;
 use path_queue::PathQueue;
 
-fn breadth_first_traverse(prog: &str, roots: Vec<String>, allow_hidden: bool, follow_links: bool, ignores: &HashSet<String>) -> path_queue::Result<()> {
+#[derive(Error, Debug)]
+enum Error {
+    #[error("path_queue::Error: {source}")]
+    PathQueue {
+        #[from]
+        source: path_queue::Error
+    }
+}
+
+type Result<T> = std::result::Result<T, Error>;
+
+fn breadth_first_traverse(prog: &str, roots: Vec<String>, allow_hidden: bool, follow_links: bool, ignores: &HashSet<String>) -> Result<()> {
     let dotdir = Path::new(".");
     let dotdotdir = Path::new("..");
 

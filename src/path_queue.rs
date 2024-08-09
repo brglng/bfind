@@ -1,6 +1,4 @@
-use std::error;
 use std::ffi::OsStr;
-use std::fmt;
 use std::io;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::fs::File;
@@ -8,55 +6,31 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::sync::mpsc::{Sender, Receiver};
-extern crate tempfile;
-use self::tempfile::NamedTempFile;
+use tempfile::NamedTempFile;
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum Error {
+    #[error("std::io::Error {{ kind = {} }}: {source}", source.kind())]
+    Io {
+        #[from]
+        source: io::Error
+    },
+
+    #[error("mpsc::RecvError: {source}")]
+    Recv {
+        #[from]
+        source: mpsc::RecvError
+    },
+
+    #[error("mpsc::SendError<PathBuf>: {source}")]
+    Send {
+        #[from]
+        source: mpsc::SendError<PathBuf>
+    },
+}
 
 pub type Result<T> = std::result::Result<T, Error>;
-
-#[derive(Debug)]
-pub enum Error {
-    IoError(io::Error),
-    RecvError(mpsc::RecvError),
-    SendError(mpsc::SendError<PathBuf>),
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match *self {
-            Self::IoError(ref e) => e.fmt(f),
-            Self::RecvError(ref e) => e.fmt(f),
-            Self::SendError(ref e) => e.fmt(f),
-        }
-    }
-}
-
-impl error::Error for Error {
-    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
-        match *self {
-            Self::IoError(ref e) => Some(e),
-            Self::RecvError(ref e) => Some(e),
-            Self::SendError(ref e) => Some(e),
-        }
-    }
-}
-
-impl From<io::Error> for Error {
-    fn from(err: io::Error) -> Self {
-        Self::IoError(err)
-    }
-}
-
-impl From<mpsc::RecvError> for Error {
-    fn from(err: mpsc::RecvError) -> Self {
-        Self::RecvError(err)
-    }
-}
-
-impl From<mpsc::SendError<PathBuf>> for Error {
-    fn from(err: mpsc::SendError<PathBuf>) -> Self {
-        Self::SendError(err)
-    }
-}
 
 struct TempfilePathQueue {
     writer:     BufWriter<File>,

@@ -1,7 +1,9 @@
 [package]
 name = "bfind"
+edition = "2021"
 version = "0.0.1"
 authors = ["Zhaosheng Pan <zhaosheng.pan@sololand.moe"]
 
 [dependencies]
 tempfile = "3"
+thiserror = "1"
