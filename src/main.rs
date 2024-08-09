@@ -17,36 +17,36 @@ fn breadth_first_traverse(prog: &str, roots: Vec<String>, allow_hidden: bool, fo
         q.push(PathBuf::from("."))?;
     } else {
         for root in roots {
-            q.push(PathBuf::from(root))?;
+            let path = PathBuf::from(root);
+            if !follow_links && path.is_symlink() {
+                continue;
+            }
+            if path != dotdir && path != dotdotdir {
+                if let Some(file_name) = path.file_name() {
+                    if let Some(file_name) = file_name.to_str() {
+                        if !allow_hidden {
+                            if let Some(first_char) = file_name.chars().next() {
+                                if first_char == '.' {
+                                    continue;
+                                }
+                            }
+                        }
+                        if ignores.get(file_name).is_some() {
+                            continue;
+                        }
+                    } else {
+                        eprintln!("{}: {}: cannot read filename", prog, path.display())
+                    }
+                } else {
+                    unreachable!("path ends with \"..\", which should not happen");
+                }
+            }
+            q.push(path)?;
         }
     }
 
     loop {
         let path = q.pop()?;
-        if !follow_links && path.is_symlink() {
-            continue;
-        }
-        if path != dotdir && path != dotdotdir {
-            if let Some(file_name) = path.file_name() {
-                if let Some(file_name) = file_name.to_str() {
-                    if !allow_hidden {
-                        if let Some(first_char) = file_name.chars().next() {
-                            if first_char == '.' {
-                                continue;
-                            }
-                        }
-                    }
-                    if ignores.get(file_name).is_some() {
-                        continue;
-                    }
-                } else {
-                    eprintln!("{}: {}: cannot read filename", prog, path.display())
-                }
-            } else {
-                unreachable!("path ends with \"..\", which should not happen");
-            }
-        }
-
         let entries = fs::read_dir(&path);
         if let Ok(entries) = entries {
             for entry in entries {
