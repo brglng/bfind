@@ -7,3 +7,5 @@ authors = ["Zhaosheng Pan <zhaosheng.pan@sololand.moe"]
 [dependencies]
 tempfile = "3"
 thiserror = "1"
+debug_print = "1"
+memmap2 = "0.9"

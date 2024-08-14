@@ -23,7 +23,7 @@ fn breadth_first_traverse(prog: &str, roots: Vec<String>, allow_hidden: bool, fo
     let dotdir = Path::new(".");
     let dotdotdir = Path::new("..");
 
-    let mut q = PathQueue::new(1024 * 1024, 1024 * 512);
+    let q = PathQueue::new(1024 * 1024)?;
 
     if roots.is_empty() {
         q.push(PathBuf::from("."))?;
@@ -58,7 +58,13 @@ fn breadth_first_traverse(prog: &str, roots: Vec<String>, allow_hidden: bool, fo
     }
 
     loop {
+        if q.is_empty() {
+            break;
+        }
         let path = q.pop()?;
+        if path == Path::new("\0") {
+            break;
+        }
         let entries = fs::read_dir(&path);
         if let Ok(entries) = entries {
             for entry in entries {
@@ -101,10 +107,6 @@ fn breadth_first_traverse(prog: &str, roots: Vec<String>, allow_hidden: bool, fo
             }
         } else {
             eprintln!("{}: {}: {}", prog, path.display(), entries.unwrap_err());
-        }
-
-        if q.len() == 0 {
-            break;
         }
     }
 
