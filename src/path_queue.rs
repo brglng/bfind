@@ -317,9 +317,9 @@ mod tests {
     fn single_thread() -> Result<()> {
         let q = PathQueue::new(4)?;
         q.push(PathBuf::from("1"))?;
-        assert_eq!(q.state(), (PathQueueState::PartiallyFilled, PathQueueState::Empty, PathQueueState::Empty));
+        assert_eq!(q.state(), (PathQueueState::Empty, PathQueueState::Empty, PathQueueState::PartiallyFilled));
         q.push(PathBuf::from("2"))?;
-        assert_eq!(q.state(), (PathQueueState::Full, PathQueueState::Empty, PathQueueState::Empty));
+        assert_eq!(q.state(), (PathQueueState::Empty, PathQueueState::Empty, PathQueueState::Full));
         q.push(PathBuf::from("3"))?;
         assert_eq!(q.state(), (PathQueueState::Full, PathQueueState::Empty, PathQueueState::PartiallyFilled));
         q.push(PathBuf::from("4"))?;
