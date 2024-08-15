@@ -1,6 +1,6 @@
 use std::{
     alloc::{alloc, dealloc, Layout},
-    cell::{RefCell, UnsafeCell},
+    cell::UnsafeCell,
     ffi::OsStr,
     fs::File,
     io::{self, BufRead, BufReader, BufWriter, Write},
@@ -10,7 +10,8 @@ use std::{
     sync::{
         atomic::{AtomicU32, AtomicUsize, Ordering},
         Condvar, Mutex
-    }
+    },
+    time::Duration
 };
 use tempfile::NamedTempFile;
 use thiserror::Error;
@@ -131,8 +132,8 @@ unsafe impl Sync for MemPathQueue {}
 struct TempfilePathQueue {
     pop_count:      AtomicUsize,
     push_count:     AtomicUsize,
-    writer:         RefCell<BufWriter<File>>,
-    reader:         RefCell<BufReader<File>>,
+    writer:         UnsafeCell<BufWriter<File>>,
+    reader:         UnsafeCell<BufReader<File>>,
 }
 
 impl TempfilePathQueue {
@@ -141,15 +142,15 @@ impl TempfilePathQueue {
         let q = Self {
             pop_count: AtomicUsize::new(0),
             push_count: AtomicUsize::new(0),
-            writer: RefCell::new(BufWriter::new(f.reopen()?)),
-            reader: RefCell::new(BufReader::new(f.reopen()?)),
+            writer: UnsafeCell::new(BufWriter::new(f.reopen()?)),
+            reader: UnsafeCell::new(BufReader::new(f.reopen()?)),
         };
         drop(f);
         Ok(q)
     }
 
     pub fn push(&self, path: &Path) -> Result<()> {
-        let mut writer = self.writer.borrow_mut();
+        let writer = unsafe { &mut *self.writer.get() };
         writer.write_all(path.as_os_str().as_bytes())?;
         writer.write_all(b"\0")?;
         writer.flush()?;
@@ -158,7 +159,7 @@ impl TempfilePathQueue {
     }
 
     pub fn pop(&self) -> Result<Option<PathBuf>> {
-        let mut reader = self.reader.borrow_mut();
+        let reader = unsafe { &mut *self.reader.get() };
         let push_count = self.push_count.load(Ordering::Acquire);
         let pop_count = self.pop_count.load(Ordering::Acquire);
         if push_count - pop_count == 0 {
@@ -185,6 +186,7 @@ impl TempfilePathQueue {
 
 unsafe impl Sync for TempfilePathQueue {}
 
+#[derive(Debug)]
 pub struct PathQueue {
     push_count:     Mutex<usize>,
     push_cond:      Condvar,
@@ -225,7 +227,7 @@ impl PathQueue {
             if mid.is_none() {
                 *mid = Some(TempfilePathQueue::new()?);
             }
-            let mid = mid.as_ref().unwrap();
+            let mid = unsafe { mid.as_ref().unwrap_unchecked() };
             if mid.state().is_empty() {
                 while let Some(p) = right.pop() {
                     if let Some(p) = left.push(p) {
@@ -249,17 +251,24 @@ impl PathQueue {
         Ok(())
     }
 
-    pub fn pop(&self) -> Result<PathBuf> {
+    pub fn pop_timeout(&self, ms: u64) -> Result<Option<PathBuf>> {
         let _pop_guard = self.pop_mutex.lock().unwrap();
 
         let left = unsafe { &mut *self.left.get() };
         let mid = unsafe { &*self.mid.get() };
         let right = unsafe { &mut *self.right.get() };
 
-        {
-            let mut push_count = self.push_count.lock().unwrap();
-            while *push_count - self.pop_count.load(Ordering::Acquire) == 0 {
-                push_count = self.push_cond.wait(push_count).unwrap();
+        if ms == 0 {
+            let _push_count = self.push_cond.wait_while(
+                self.push_count.lock().unwrap(), 
+                |&mut push_count| push_count - self.pop_count.load(Ordering::Acquire) == 0).unwrap();
+        } else {
+            let result = self.push_cond.wait_timeout_while(
+                self.push_count.lock().unwrap(), 
+                Duration::from_millis(ms), 
+                |&mut push_count| push_count - self.pop_count.load(Ordering::Acquire) == 0).unwrap();
+            if result.1.timed_out() {
+                return Ok(None);
             }
         }
 
@@ -285,7 +294,12 @@ impl PathQueue {
 
         self.pop_count.fetch_add(1, Ordering::Release);
 
-        Ok(path)
+        Ok(Some(path))
+    }
+
+    pub fn pop(&self) -> Result<PathBuf> {
+        let path = self.pop_timeout(0)?;
+        Ok(unsafe { path.unwrap_unchecked() })
     }
 
     pub fn is_empty(&self) -> bool {

@@ -1,8 +1,11 @@
 use std::env;
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 use std::process::exit;
+use std::thread;
 use thiserror::Error;
 
 mod path_queue;
@@ -19,94 +22,59 @@ enum Error {
 
 type Result<T> = std::result::Result<T, Error>;
 
-fn breadth_first_traverse(prog: &str, roots: Vec<String>, allow_hidden: bool, follow_links: bool, ignores: &HashSet<String>) -> Result<()> {
-    let dotdir = Path::new(".");
-    let dotdotdir = Path::new("..");
+fn f(v: &i32) {
 
-    let q = PathQueue::new(1024 * 512, 1024 * 512)?;
+}
 
-    if roots.is_empty() {
-        q.push(PathBuf::from("."))?;
-    } else {
-        for root in roots {
-            let path = PathBuf::from(root);
-            if !follow_links && path.is_symlink() {
-                continue;
-            }
-            if path != dotdir && path != dotdotdir {
-                if let Some(file_name) = path.file_name() {
-                    if let Some(file_name) = file_name.to_str() {
-                        if !allow_hidden {
-                            if let Some(first_char) = file_name.chars().next() {
-                                if first_char == '.' {
-                                    continue;
-                                }
-                            }
-                        }
-                        if ignores.get(file_name).is_some() {
-                            continue;
-                        }
-                    } else {
-                        eprintln!("{}: {}: cannot read filename", prog, path.display())
-                    }
-                } else {
-                    unreachable!("path ends with \"..\", which should not happen");
-                }
-            }
-            q.push(path)?;
-        }
-    }
-
+fn breadth_first_traverse(prog: &str, allow_hidden: bool, follow_links: bool, ignores: &HashSet<String>, in_queue: &PathQueue, out_queue: &PathQueue) -> Result<()> {
     loop {
-        if q.is_empty() {
-            break;
-        }
-        let path = q.pop()?;
-        if path == Path::new("\0") {
-            break;
-        }
-        let entries = fs::read_dir(&path);
-        if let Ok(entries) = entries {
-            for entry in entries {
-                if let Ok(entry) = entry {
-                    let mut path = entry.path();
-                    if follow_links && path.is_symlink() {
-                        let p = path.read_link();
-                        if let Ok(p) = p {
-                            path = p;
-                        } else {
-                            eprintln!("{}: {}: {}", prog, path.display(), p.unwrap_err());
-                            continue;
-                        }
-                    }
-                    if let Some(file_name) = path.file_name() {
-                        if let Some(file_name) = file_name.to_str() {
-                            if !allow_hidden {
-                                if let Some(first_char) = file_name.chars().next() {
-                                    if first_char == '.' {
-                                        continue;
-                                    }
-                                }
-                            }
-                            if ignores.get(file_name).is_some() {
+        let path = in_queue.pop_timeout(200)?;
+        if let Some(path) = path {
+            let entries = fs::read_dir(&path);
+            if let Ok(entries) = entries {
+                for entry in entries {
+                    if let Ok(entry) = entry {
+                        let mut path = entry.path();
+                        if follow_links && path.is_symlink() {
+                            let p = path.read_link();
+                            if let Ok(p) = p {
+                                path = p;
+                            } else {
+                                eprintln!("{}: {}: {}", prog, path.display(), p.unwrap_err());
                                 continue;
                             }
-                            println!("{}", path.display());
-                            if path.is_dir() {
-                                q.push(path)?;
+                        }
+                        if let Some(file_name) = path.file_name() {
+                            if let Some(file_name) = file_name.to_str() {
+                                if !allow_hidden {
+                                    if let Some(first_char) = file_name.chars().next() {
+                                        if first_char == '.' {
+                                            continue;
+                                        }
+                                    }
+                                }
+                                if ignores.get(file_name).is_some() {
+                                    continue;
+                                }
+                                println!("{}", path.display());
+                                if path.is_dir() {
+                                    out_queue.push(path)?;
+                                }
+                            } else {
+                                eprintln!("{}: {}: cannot read filename", prog, path.display());
                             }
                         } else {
-                            eprintln!("{}: {}: cannot read filename", prog, path.display());
+                            unreachable!("path ends with \"..\", which should not happen");
                         }
                     } else {
-                        unreachable!("path ends with \"..\", which should not happen");
+                        eprintln!("{}: {}: {}", prog, path.display(), entry.unwrap_err());
                     }
-                } else {
-                    eprintln!("{}: {}: {}", prog, path.display(), entry.unwrap_err());
                 }
+            } else {
+                eprintln!("{}: {}: {}", prog, path.display(), entries.unwrap_err());
             }
         } else {
-            eprintln!("{}: {}: {}", prog, path.display(), entries.unwrap_err());
+            break;
         }
     }
 
@@ -134,7 +102,7 @@ fn print_help(prog: &str) {
 fn main() {
     let mut args: VecDeque<String> = env::args().collect();
 
-    let mut allow_dot = false;
+    let mut allow_hidden = false;
     let mut follow_links = false;
     let mut roots: Vec<String> = Vec::new();
     let mut max_depth = i32::MAX;
@@ -151,7 +119,7 @@ fn main() {
         match state {
             CliState::Options => {
                 if arg == "-H" {
-                    allow_dot = true;
+                    allow_hidden = true;
                 } else if arg == "-L" {
                     follow_links = true;
                 } else if arg == "-h" || arg == "--help" {
@@ -207,7 +175,74 @@ fn main() {
         }
     }
 
-    if let Err(e) = breadth_first_traverse(prog, roots, allow_dot, follow_links, &ignores) {
+    let num_threads = 4;
+    let mut queues = Vec::new();
+    for _ in 0..num_threads {
+        let queue = PathQueue::new(1024 * 512 / num_threads, 1024 * 512 / num_threads);
+        if let Ok(queue) = queue {
+            queues.push(queue);
+        } else {
+            let e = queue.unwrap_err();
+            eprintln!("{}: {}", prog, e);
+            return;
+        }
+    }
+
+    if roots.is_empty() {
+        if let Err(e) = queues[0].push(PathBuf::from(".")) {
+            eprintln!("{}: {}", prog, e);
+            return;
+        }
+    } else {
+        let dotdir = Path::new(".");
+        let dotdotdir = Path::new("..");
+        let rootdir = Path::new("/");
+        for root in &roots {
+            let path = PathBuf::from(root);
+            if !follow_links && path.is_symlink() {
+                continue;
+            }
+            if path != dotdir && path != dotdotdir && path != rootdir {
+                eprintln!("{}", path.display());
+                if let Some(file_name) = path.file_name() {
+                    if let Some(file_name) = file_name.to_str() {
+                        if !allow_hidden {
+                            if let Some(first_char) = file_name.chars().next() {
+                                if first_char == '.' {
+                                    continue;
+                                }
+                            }
+                        }
+                        if ignores.contains(file_name) {
+                            continue;
+                        }
+                    } else {
+                        eprintln!("{}: {}: cannot read filename", prog, path.display())
+                    }
+                } else {
+                    unreachable!("path ends with \"..\", which should not happen");
+                }
+            }
+            if let Err(e) = queues[0].push(path) {
+                eprintln!("{}: {}", prog, e);
+                return;
+            }
+        }
+    }
+
+    if let Err(e) = thread::scope(|s| -> Result<()> {
+        let ignores = &ignores;
+        let queues = &queues;
+        for i in 0..num_threads {
+            s.spawn(move|| -> Result<()> {
+                breadth_first_traverse(
+                    prog, allow_hidden, follow_links, ignores,
+                    &queues[i as usize],
+                    &queues[((i + 1) % num_threads) as usize])
+            });
+        }
+        Ok(())
+    }) {
         eprintln!("{}: {}", prog, e);
     }
 }
