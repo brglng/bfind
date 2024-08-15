@@ -1,6 +1,6 @@
 use std::{
     alloc::{alloc, dealloc, Layout},
-    cell::UnsafeCell,
+    cell::{RefCell, UnsafeCell},
     ffi::OsStr,
     fs::File,
     io::{self, BufRead, BufReader, BufWriter, Write},
@@ -12,12 +12,11 @@ use std::{
         Condvar, Mutex
     }
 };
+use tempfile::NamedTempFile;
+use thiserror::Error;
 
 #[allow(unused_imports)]
 use debug_print::{debug_println, debug_eprintln};
-
-use tempfile::NamedTempFile;
-use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -54,6 +53,7 @@ impl PathQueueState {
     }
 }
 
+#[derive(Debug)]
 struct MemPathQueue {
     capacity:       u32,
     pop_count:      AtomicU32,
@@ -127,11 +127,12 @@ impl Drop for MemPathQueue {
 
 unsafe impl Sync for MemPathQueue {}
 
+#[derive(Debug)]
 struct TempfilePathQueue {
     pop_count:      AtomicUsize,
     push_count:     AtomicUsize,
-    writer:         BufWriter<File>,
-    reader:         BufReader<File>,
+    writer:         RefCell<BufWriter<File>>,
+    reader:         RefCell<BufReader<File>>,
 }
 
 impl TempfilePathQueue {
@@ -140,29 +141,31 @@ impl TempfilePathQueue {
         let q = Self {
             pop_count: AtomicUsize::new(0),
             push_count: AtomicUsize::new(0),
-            writer: BufWriter::new(f.reopen()?),
-            reader: BufReader::new(f.reopen()?),
+            writer: RefCell::new(BufWriter::new(f.reopen()?)),
+            reader: RefCell::new(BufReader::new(f.reopen()?)),
         };
         drop(f);
         Ok(q)
     }
 
-    pub fn push(&mut self, path: &Path) -> Result<()> {
-        self.writer.write_all(path.as_os_str().as_bytes())?;
-        self.writer.write_all(b"\0")?;
-        self.writer.flush()?;
+    pub fn push(&self, path: &Path) -> Result<()> {
+        let mut writer = self.writer.borrow_mut();
+        writer.write_all(path.as_os_str().as_bytes())?;
+        writer.write_all(b"\0")?;
+        writer.flush()?;
         self.push_count.fetch_add(1, Ordering::Release);
         Ok(())
     }
 
-    pub fn pop(&mut self) -> Result<Option<PathBuf>> {
+    pub fn pop(&self) -> Result<Option<PathBuf>> {
+        let mut reader = self.reader.borrow_mut();
         let push_count = self.push_count.load(Ordering::Acquire);
         let pop_count = self.pop_count.load(Ordering::Acquire);
         if push_count - pop_count == 0 {
             return Ok(None);
         }
         let mut buffer = vec![];
-        self.reader.read_until(b'\0', &mut buffer)?;
+        reader.read_until(b'\0', &mut buffer)?;
         let delim = buffer.pop();
         assert_eq!(delim, Some(b'\0'));
         self.pop_count.fetch_add(1, Ordering::Release);
@@ -195,8 +198,8 @@ pub struct PathQueue {
 }
 
 impl PathQueue {
-    pub fn new(mem_path_count: u32) -> Result<Self> {
-        assert!(mem_path_count >= 2);
+    pub fn new(read_buf_len: u32, write_buf_len: u32) -> Result<Self> {
+        assert!(read_buf_len > 0 && write_buf_len > 0);
         Ok(PathQueue {
             push_count: Mutex::new(0),
             push_cond: Condvar::new(),
@@ -204,9 +207,9 @@ impl PathQueue {
             push_mutex: Mutex::new(()),
             pop_mutex: Mutex::new(()),
             spill_mutex: Mutex::new(()),
-            left: UnsafeCell::new(MemPathQueue::new(mem_path_count / 2)),
+            left: UnsafeCell::new(MemPathQueue::new(read_buf_len)),
             mid: UnsafeCell::new(None),
-            right: UnsafeCell::new(MemPathQueue::new(mem_path_count / 2)),
+            right: UnsafeCell::new(MemPathQueue::new(write_buf_len)),
         })
     }
 
@@ -222,17 +225,16 @@ impl PathQueue {
             if mid.is_none() {
                 *mid = Some(TempfilePathQueue::new()?);
             }
-            if let Some(mid) = mid {
-                if mid.state().is_empty() {
-                    while let Some(p) = right.pop() {
-                        if let Some(p) = left.push(p) {
-                            mid.push(&p)?;
-                        }
-                    }
-                } else {
-                    while let Some(p) = right.pop() {
+            let mid = mid.as_ref().unwrap();
+            if mid.state().is_empty() {
+                while let Some(p) = right.pop() {
+                    if let Some(p) = left.push(p) {
                         mid.push(&p)?;
                     }
+                }
+            } else {
+                while let Some(p) = right.pop() {
+                    mid.push(&p)?;
                 }
             }
             right.push(path);
@@ -251,7 +253,7 @@ impl PathQueue {
         let _pop_guard = self.pop_mutex.lock().unwrap();
 
         let left = unsafe { &mut *self.left.get() };
-        let mid = unsafe { &mut *self.mid.get() };
+        let mid = unsafe { &*self.mid.get() };
         let right = unsafe { &mut *self.right.get() };
 
         {
@@ -315,7 +317,7 @@ mod tests {
 
     #[test]
     fn single_thread() -> Result<()> {
-        let q = PathQueue::new(4)?;
+        let q = PathQueue::new(2, 2)?;
         q.push(PathBuf::from("1"))?;
         assert_eq!(q.state(), (PathQueueState::Empty, PathQueueState::Empty, PathQueueState::PartiallyFilled));
         q.push(PathBuf::from("2"))?;
@@ -339,7 +341,7 @@ mod tests {
 
     #[test]
     fn spsc() -> Result<()> {
-        let queue = PathQueue::new(100)?;
+        let queue = PathQueue::new(73, 131)?;
         let count = 100000;
         thread::scope(|s| -> Result<()> {
             s.spawn(|| -> Result<()> {

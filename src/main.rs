@@ -23,7 +23,7 @@ fn breadth_first_traverse(prog: &str, roots: Vec<String>, allow_hidden: bool, fo
     let dotdir = Path::new(".");
     let dotdotdir = Path::new("..");
 
-    let q = PathQueue::new(1024 * 1024)?;
+    let q = PathQueue::new(1024 * 512, 1024 * 512)?;
 
     if roots.is_empty() {
         q.push(PathBuf::from("."))?;
