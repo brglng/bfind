@@ -2,7 +2,6 @@ use std::collections::VecDeque;
 use std::env;
 use std::fs;
 use std::io;
-use std::cmp::max;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::exit;
@@ -29,7 +28,7 @@ enum Error {
 
 type Result<T> = std::result::Result<T, Error>;
 
-fn breadth_first_traverse(prog: &str, allow_hidden: bool, follow_links: bool, ignores: &[String], in_queue: &PathQueue, out_queue: &PathQueue) -> Result<()> {
+fn breadth_first_traverse(prog: &str, cwd: &Path, allow_hidden: bool, follow_links: bool, ignores: &[String], strip_cwd_prefix: bool, in_queue: &PathQueue, out_queue: &PathQueue) -> Result<()> {
     loop {
         let path = in_queue.pop_timeout(200)?;
         if let Some(path) = path {
@@ -63,7 +62,15 @@ fn breadth_first_traverse(prog: &str, allow_hidden: bool, follow_links: bool, ig
                                 opt_path = Some(entry.path());
                             }
                             let path = unsafe { opt_path.unwrap_unchecked() };
-                            println!("{}", path.display());
+                            if strip_cwd_prefix {
+                                if path.starts_with("./") {
+                                    println!("{}", unsafe { path.strip_prefix("./").unwrap_unchecked() }.display());
+                                } else if path.starts_with(cwd) {
+                                    println!("{}", unsafe { path.strip_prefix(cwd).unwrap_unchecked() }.display());
+                                }
+                            } else {
+                                println!("{}", path.display());
+                            }
                             if path.is_dir() {
                                 out_queue.push(path)?;
                             }
@@ -111,6 +118,7 @@ fn main() {
     let mut roots: Vec<String> = Vec::new();
     let mut max_depth = i32::MAX;
     let mut ignores: Vec<String> = Vec::new();
+    let mut strip_cwd_prefix = false;
     let mut state = CliState::Options;
     let mut verb = Verb::Print;
     let mut action_tokens = Vec::new();
@@ -118,6 +126,10 @@ fn main() {
 
     let prog_path = args.pop_front().unwrap();
     let prog = prog_path.rsplit('/').nth_back(0).unwrap();
+    let cwd = env::current_dir().unwrap_or_else(|e| {
+        eprintln!("{}: {}", prog, e);
+        exit(1);
+    });
 
     while let Some(arg) = args.pop_front() {
         match state {
@@ -151,6 +163,8 @@ fn main() {
                         eprintln!("{}: missing argument to -I", prog);
                         exit(1);
                     }
+                } else if arg == "--strip-cwd-prefix" {
+                    strip_cwd_prefix = true;
                 } else if arg == "print" {
                     verb = Verb::Print;
                     state = CliState::Action;
@@ -241,12 +255,13 @@ fn main() {
     }
 
     if let Err(e) = thread::scope(|s| -> Result<()> {
+        let cwd = &cwd;
         let ignores = &ignores;
         let queues = &queues;
         for i in 0..num_threads {
             s.spawn(move|| -> Result<()> {
                 breadth_first_traverse(
-                    prog, allow_hidden, follow_links, ignores,
+                    prog, cwd, allow_hidden, follow_links, ignores, strip_cwd_prefix,
                     &queues[i],
                     &queues[(i + 1) % num_threads])
             });
