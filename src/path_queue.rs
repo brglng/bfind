@@ -1,18 +1,26 @@
-use std::{
-    alloc::{alloc, dealloc, Layout},
-    cell::UnsafeCell,
-    ffi::OsStr,
-    fs::File,
-    io::{self, BufRead, BufReader, BufWriter, Write},
-    mem::{align_of, size_of},
-    os::unix::ffi::OsStrExt,
-    path::{Path, PathBuf},
-    sync::{
-        atomic::{AtomicU32, AtomicUsize, Ordering},
-        Condvar, Mutex
-    },
-    time::Duration
-};
+use std::alloc::alloc;
+use std::alloc::dealloc;
+use std::alloc::Layout;
+use std::cell::UnsafeCell;
+use std::ffi::OsStr;
+use std::fs::File;
+use std::io;
+use std::io::BufRead;
+use std::io::BufReader;
+use std::io::BufWriter;
+use std::io::Write;
+use std::mem::align_of;
+use std::mem::size_of;
+use std::num::Wrapping;
+use std::os::unix::ffi::OsStrExt;
+use std::path::Path;
+use std::path::PathBuf;
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
+use std::sync::Condvar;
+use std::time::Duration;
+use std::sync::Mutex;
 use tempfile::NamedTempFile;
 use thiserror::Error;
 
@@ -188,11 +196,9 @@ unsafe impl Sync for TempfilePathQueue {}
 
 #[derive(Debug)]
 pub struct PathQueue {
-    push_count:     Mutex<usize>,
+    push_count:     Mutex<Wrapping<usize>>,
     push_cond:      Condvar,
     pop_count:      AtomicUsize,
-    push_mutex:     Mutex<()>,
-    pop_mutex:      Mutex<()>,
     spill_mutex:    Mutex<()>,
     left:           UnsafeCell<MemPathQueue>,
     mid:            UnsafeCell<Option<TempfilePathQueue>>,
@@ -203,11 +209,9 @@ impl PathQueue {
     pub fn new(read_buf_len: u32, write_buf_len: u32) -> Result<Self> {
         assert!(read_buf_len > 0 && write_buf_len > 0);
         Ok(PathQueue {
-            push_count: Mutex::new(0),
+            push_count: Mutex::new(Wrapping(0)),
             push_cond: Condvar::new(),
             pop_count: AtomicUsize::new(0),
-            push_mutex: Mutex::new(()),
-            pop_mutex: Mutex::new(()),
             spill_mutex: Mutex::new(()),
             left: UnsafeCell::new(MemPathQueue::new(read_buf_len)),
             mid: UnsafeCell::new(None),
@@ -215,9 +219,8 @@ impl PathQueue {
         })
     }
 
+    // only safe when there is only a single pusher
     pub fn push(&self, path: PathBuf) -> Result<()> {
-        let _push_guard = self.push_mutex.lock().unwrap();
-
         let left = unsafe { &mut *self.left.get() };
         let mid = unsafe { &mut *self.mid.get() };
         let right = unsafe { &mut *self.right.get() };
@@ -251,9 +254,8 @@ impl PathQueue {
         Ok(())
     }
 
+    // only safe when there is only a single popper
     pub fn pop_timeout(&self, ms: u64) -> Result<Option<PathBuf>> {
-        let _pop_guard = self.pop_mutex.lock().unwrap();
-
         let left = unsafe { &mut *self.left.get() };
         let mid = unsafe { &*self.mid.get() };
         let right = unsafe { &mut *self.right.get() };
@@ -261,12 +263,12 @@ impl PathQueue {
         if ms == 0 {
             let _push_count = self.push_cond.wait_while(
                 self.push_count.lock().unwrap(), 
-                |&mut push_count| push_count - self.pop_count.load(Ordering::Acquire) == 0).unwrap();
+                |&mut push_count| push_count - Wrapping(self.pop_count.load(Ordering::Acquire)) == Wrapping(0)).unwrap();
         } else {
             let result = self.push_cond.wait_timeout_while(
                 self.push_count.lock().unwrap(), 
                 Duration::from_millis(ms), 
-                |&mut push_count| push_count - self.pop_count.load(Ordering::Acquire) == 0).unwrap();
+                |&mut push_count| push_count - Wrapping(self.pop_count.load(Ordering::Acquire)) == Wrapping(0)).unwrap();
             if result.1.timed_out() {
                 return Ok(None);
             }
@@ -297,20 +299,22 @@ impl PathQueue {
         Ok(Some(path))
     }
 
+    #[allow(dead_code)]
     pub fn pop(&self) -> Result<PathBuf> {
         let path = self.pop_timeout(0)?;
         Ok(unsafe { path.unwrap_unchecked() })
     }
 
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         let push_count = self.push_count.lock().unwrap();
-        *push_count - self.pop_count.load(Ordering::Acquire) == 0
+        *push_count - Wrapping(self.pop_count.load(Ordering::Acquire)) == Wrapping(0)
     }
 
     #[cfg(test)]
     pub fn state(&self) -> (PathQueueState, PathQueueState, PathQueueState) {
-        let _push_guard = self.push_mutex.lock().unwrap();
-        let _pop_guard = self.pop_mutex.lock().unwrap();
+        let _push_count = self.push_count.lock().unwrap();
+        let _spill_guard = self.spill_mutex.lock().unwrap();
         let left = unsafe { &*self.left.get() };
         let mid = unsafe { &*self.mid.get() };
         let right = unsafe { &*self.right.get() };

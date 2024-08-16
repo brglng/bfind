@@ -1,7 +1,8 @@
-use std::env;
-use std::collections::HashSet;
 use std::collections::VecDeque;
+use std::env;
 use std::fs;
+use std::io;
+use std::cmp::max;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::exit;
@@ -13,6 +14,12 @@ use path_queue::PathQueue;
 
 #[derive(Error, Debug)]
 enum Error {
+    #[error("std::io::Error {{ kind = {} }}: {source}", source.kind())]
+    Io {
+        #[from]
+        source: io::Error
+    },
+
     #[error("path_queue::Error: {source}")]
     PathQueue {
         #[from]
@@ -22,49 +29,46 @@ enum Error {
 
 type Result<T> = std::result::Result<T, Error>;
 
-fn f(v: &i32) {
-
-}
-
-fn breadth_first_traverse(prog: &str, allow_hidden: bool, follow_links: bool, ignores: &HashSet<String>, in_queue: &PathQueue, out_queue: &PathQueue) -> Result<()> {
+fn breadth_first_traverse(prog: &str, allow_hidden: bool, follow_links: bool, ignores: &[String], in_queue: &PathQueue, out_queue: &PathQueue) -> Result<()> {
     loop {
-        let path = in_queue.pop_timeout(200)?;
+        let path = in_queue.pop_timeout(100)?;
         if let Some(path) = path {
             let entries = fs::read_dir(&path);
             if let Ok(entries) = entries {
                 for entry in entries {
                     if let Ok(entry) = entry {
-                        let mut path = entry.path();
-                        if follow_links && path.is_symlink() {
-                            let p = path.read_link();
+                        let metadata = entry.metadata()?;
+                        let mut opt_path = None;
+                        if follow_links && metadata.is_symlink() {
+                            let p = entry.path().read_link();
                             if let Ok(p) = p {
-                                path = p;
+                                opt_path = Some(p);
                             } else {
                                 eprintln!("{}: {}: {}", prog, path.display(), p.unwrap_err());
                                 continue;
                             }
                         }
-                        if let Some(file_name) = path.file_name() {
-                            if let Some(file_name) = file_name.to_str() {
-                                if !allow_hidden {
-                                    if let Some(first_char) = file_name.chars().next() {
-                                        if first_char == '.' {
-                                            continue;
-                                        }
+                        if let Some(file_name) = entry.file_name().to_str() {
+                            if !allow_hidden {
+                                if let Some(first_char) = file_name.chars().next() {
+                                    if first_char == '.' {
+                                        continue;
                                     }
                                 }
-                                if ignores.get(file_name).is_some() {
-                                    continue;
-                                }
-                                println!("{}", path.display());
-                                if path.is_dir() {
-                                    out_queue.push(path)?;
-                                }
-                            } else {
-                                eprintln!("{}: {}: cannot read filename", prog, path.display());
+                            }
+                            if ignores.iter().any(|item| item == file_name) {
+                                continue;
+                            }
+                            if opt_path.is_none() {
+                                opt_path = Some(entry.path());
+                            }
+                            let path = unsafe { opt_path.unwrap_unchecked() };
+                            println!("{}", path.display());
+                            if path.is_dir() {
+                                out_queue.push(path)?;
                             }
                         } else {
-                            unreachable!("path ends with \"..\", which should not happen");
+                            eprintln!("{}: {}: cannot read filename", prog, path.display());
                         }
                     } else {
                         eprintln!("{}: {}: {}", prog, path.display(), entry.unwrap_err());
@@ -106,7 +110,7 @@ fn main() {
     let mut follow_links = false;
     let mut roots: Vec<String> = Vec::new();
     let mut max_depth = i32::MAX;
-    let mut ignores: HashSet<String> = HashSet::new();
+    let mut ignores: Vec<String> = Vec::new();
     let mut state = CliState::Options;
     let mut verb = Verb::Print;
     let mut action_tokens = Vec::new();
@@ -175,23 +179,29 @@ fn main() {
         }
     }
 
-    let num_threads = 4;
+    let num_threads = {
+        if let Ok(n) = thread::available_parallelism() {
+            max(n.get() , 16)
+        } else {
+            exit(1);
+        }
+    };
     let mut queues = Vec::new();
     for _ in 0..num_threads {
-        let queue = PathQueue::new(1024 * 512 / num_threads, 1024 * 512 / num_threads);
+        let queue = PathQueue::new((1024 * 512 / num_threads) as u32, (1024 * 512 / num_threads) as u32);
         if let Ok(queue) = queue {
             queues.push(queue);
         } else {
             let e = queue.unwrap_err();
             eprintln!("{}: {}", prog, e);
-            return;
+            exit(1);
         }
     }
 
     if roots.is_empty() {
         if let Err(e) = queues[0].push(PathBuf::from(".")) {
             eprintln!("{}: {}", prog, e);
-            return;
+            exit(1);
         }
     } else {
         let dotdir = Path::new(".");
@@ -213,7 +223,7 @@ fn main() {
                                 }
                             }
                         }
-                        if ignores.contains(file_name) {
+                        if ignores.iter().any(|item| item == file_name) {
                             continue;
                         }
                     } else {
@@ -225,7 +235,7 @@ fn main() {
             }
             if let Err(e) = queues[0].push(path) {
                 eprintln!("{}: {}", prog, e);
-                return;
+                exit(1)
             }
         }
     }
@@ -237,8 +247,8 @@ fn main() {
             s.spawn(move|| -> Result<()> {
                 breadth_first_traverse(
                     prog, allow_hidden, follow_links, ignores,
-                    &queues[i as usize],
-                    &queues[((i + 1) % num_threads) as usize])
+                    &queues[i],
+                    &queues[(i + 1) % num_threads])
             });
         }
         Ok(())
