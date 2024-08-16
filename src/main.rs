@@ -31,7 +31,7 @@ type Result<T> = std::result::Result<T, Error>;
 
 fn breadth_first_traverse(prog: &str, allow_hidden: bool, follow_links: bool, ignores: &[String], in_queue: &PathQueue, out_queue: &PathQueue) -> Result<()> {
     loop {
-        let path = in_queue.pop_timeout(100)?;
+        let path = in_queue.pop_timeout(200)?;
         if let Some(path) = path {
             let entries = fs::read_dir(&path);
             if let Ok(entries) = entries {
@@ -181,7 +181,7 @@ fn main() {
 
     let num_threads = {
         if let Ok(n) = thread::available_parallelism() {
-            max(n.get() , 16)
+            n.get()
         } else {
             exit(1);
         }
