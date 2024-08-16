@@ -28,7 +28,27 @@ enum Error {
 
 type Result<T> = std::result::Result<T, Error>;
 
-fn breadth_first_traverse(prog: &str, cwd: &Path, allow_hidden: bool, follow_links: bool, ignores: &[String], strip_cwd_prefix: bool, in_queue: &PathQueue, out_queue: &PathQueue) -> Result<()> {
+struct Options {
+    allow_hidden:       bool,
+    follow_links:       bool,
+    max_depth:          i32,
+    ignores:            Vec<String>,
+    strip_cwd_prefix:   bool,
+}
+
+impl Options {
+    pub fn new() -> Self {
+        Self {
+            allow_hidden: false,
+            follow_links: false,
+            max_depth: i32::MAX,
+            ignores: Vec::new(),
+            strip_cwd_prefix: false,
+        }
+    }
+}
+
+fn breadth_first_traverse(prog: &str, cwd: &Path, opt: &Options, in_queue: &PathQueue, out_queue: &PathQueue) -> Result<()> {
     loop {
         let path = in_queue.pop_timeout(200)?;
         if let Some(path) = path {
@@ -37,32 +57,32 @@ fn breadth_first_traverse(prog: &str, cwd: &Path, allow_hidden: bool, follow_lin
                 for entry in entries {
                     if let Ok(entry) = entry {
                         let metadata = entry.metadata()?;
-                        let mut opt_path = None;
-                        if follow_links && metadata.is_symlink() {
+                        let mut path_or_none = None;
+                        if opt.follow_links && metadata.is_symlink() {
                             let p = entry.path().read_link();
                             if let Ok(p) = p {
-                                opt_path = Some(p);
+                                path_or_none = Some(p);
                             } else {
                                 eprintln!("{}: {}: {}", prog, path.display(), p.unwrap_err());
                                 continue;
                             }
                         }
                         if let Some(file_name) = entry.file_name().to_str() {
-                            if !allow_hidden {
+                            if !opt.allow_hidden {
                                 if let Some(first_char) = file_name.chars().next() {
                                     if first_char == '.' {
                                         continue;
                                     }
                                 }
                             }
-                            if ignores.iter().any(|item| item == file_name) {
+                            if opt.ignores.iter().any(|item| item == file_name) {
                                 continue;
                             }
-                            if opt_path.is_none() {
-                                opt_path = Some(entry.path());
+                            if path_or_none.is_none() {
+                                path_or_none = Some(entry.path());
                             }
-                            let path = unsafe { opt_path.unwrap_unchecked() };
-                            if strip_cwd_prefix {
+                            let path = unsafe { path_or_none.unwrap_unchecked() };
+                            if opt.strip_cwd_prefix {
                                 if path.starts_with("./") {
                                     println!("{}", unsafe { path.strip_prefix("./").unwrap_unchecked() }.display());
                                 } else if path.starts_with(cwd) {
@@ -88,7 +108,6 @@ fn breadth_first_traverse(prog: &str, cwd: &Path, allow_hidden: bool, follow_lin
             break;
         }
     }
-
     Ok(())
 }
 
@@ -113,13 +132,9 @@ fn print_help(prog: &str) {
 fn main() {
     let mut args: VecDeque<String> = env::args().collect();
 
-    let mut allow_hidden = false;
-    let mut follow_links = false;
-    let mut roots: Vec<String> = Vec::new();
-    let mut max_depth = i32::MAX;
-    let mut ignores: Vec<String> = Vec::new();
-    let mut strip_cwd_prefix = false;
     let mut state = CliState::Options;
+    let mut roots: Vec<String> = Vec::new();
+    let mut options = Options::new();
     let mut verb = Verb::Print;
     let mut action_tokens = Vec::new();
     let mut expr_tokens: Vec<String> = Vec::new();
@@ -135,9 +150,9 @@ fn main() {
         match state {
             CliState::Options => {
                 if arg == "-H" {
-                    allow_hidden = true;
+                    options.allow_hidden = true;
                 } else if arg == "-L" {
-                    follow_links = true;
+                    options.follow_links = true;
                 } else if arg == "-h" || arg == "--help" {
                     print_help(prog);
                 } else if arg == "-d" || arg == "--depth" {
@@ -147,7 +162,7 @@ fn main() {
                                 eprintln!("{}: depth must be > 0", prog);
                                 exit(1);
                             }
-                            max_depth = depth;
+                            options.max_depth = depth;
                         } else {
                             eprintln!("{}: unable to parse \"{}\" as i32", prog, &depth_str);
                             exit(1);
@@ -158,13 +173,13 @@ fn main() {
                     }
                 } else if arg == "-I" || arg == "--ignore" {
                     if let Some(ignore) = args.pop_front() {
-                        ignores = ignore.split(',').map(|s| { s.to_string() }).collect();
+                        options.ignores = ignore.split(',').map(|s| { s.to_string() }).collect();
                     } else {
                         eprintln!("{}: missing argument to -I", prog);
                         exit(1);
                     }
                 } else if arg == "--strip-cwd-prefix" {
-                    strip_cwd_prefix = true;
+                    options.strip_cwd_prefix = true;
                 } else if arg == "print" {
                     verb = Verb::Print;
                     state = CliState::Action;
@@ -223,21 +238,21 @@ fn main() {
         let rootdir = Path::new("/");
         for root in &roots {
             let path = PathBuf::from(root);
-            if !follow_links && path.is_symlink() {
+            if !options.follow_links && path.is_symlink() {
                 continue;
             }
             if path != dotdir && path != dotdotdir && path != rootdir {
                 eprintln!("{}", path.display());
                 if let Some(file_name) = path.file_name() {
                     if let Some(file_name) = file_name.to_str() {
-                        if !allow_hidden {
+                        if !options.allow_hidden {
                             if let Some(first_char) = file_name.chars().next() {
                                 if first_char == '.' {
                                     continue;
                                 }
                             }
                         }
-                        if ignores.iter().any(|item| item == file_name) {
+                        if options.ignores.iter().any(|item| item == file_name) {
                             continue;
                         }
                     } else {
@@ -256,12 +271,12 @@ fn main() {
 
     if let Err(e) = thread::scope(|s| -> Result<()> {
         let cwd = &cwd;
-        let ignores = &ignores;
+        let options = &options;
         let queues = &queues;
         for i in 0..num_threads {
             s.spawn(move|| -> Result<()> {
                 breadth_first_traverse(
-                    prog, cwd, allow_hidden, follow_links, ignores, strip_cwd_prefix,
+                    prog, cwd, options,
                     &queues[i],
                     &queues[(i + 1) % num_threads])
             });
