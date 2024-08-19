@@ -67,7 +67,7 @@ struct MemPathQueue {
     capacity:       u32,
     pop_count:      AtomicU32,
     push_count:     AtomicU32,
-    buf:            *mut PathBuf
+    buf:            *mut PathBuf,
 }
 
 impl MemPathQueue {
