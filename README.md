@@ -2,9 +2,15 @@
 
 ![build](https://github.com/brglng/bfind/actions/workflows/rust.yml/badge.svg)
 
-A [GNU find](https://www.gnu.org/software/findutils/)-like tool, but uses breadth-first traversal instead of depth-first traversal, written in [Rust](https://www.rust-lang.org/).
+A [GNU find](https://www.gnu.org/software/findutils/)-like tool, but uses breadth-first search instead of depth-first search, written in [Rust](https://www.rust-lang.org/).
 
-**NO WARRANTY:** This is only a tool for my personal use. I have no plan to improve its performance or features, neither are issues guaranteed to get fixed, but PR is welcome.
+## Why
+
+* BFS prefers files that are shallower, which means files in shallower directories are more likely to be found in a shorter time.
+* When encountering a subdirectory which has many very deep subdirectories, BFS doesn't stuck on it before moving to the next subdirectory.
+* I want to learn Rust by making this tool.
+
+**NO WARRANTY:** I make this tool mainly for my personal use. I have no plan to improve its performance or features, neither are issues guaranteed to get fixed. However, PR is welcome.
 
 ## Build
 
@@ -21,7 +27,7 @@ $ cargo build --release
 ## Install
 
 ```sh
-$ cargo install
+$ cargo install --path .
 ```
 
 ## Usage
