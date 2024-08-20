@@ -55,18 +55,17 @@ fn breadth_first_traverse(prog: &str, cwd: &Path, opt: &Options, in_queue: &Path
         if counter.load(Ordering::Acquire) == 0 {
             break;
         }
-        let path = in_queue.pop_timeout(5)?;
+        let path = in_queue.pop_timeout(10)?;
         if let Some(path) = path {
             let entries = fs::read_dir(&path);
             if let Ok(entries) = entries {
                 for entry in entries {
                     if let Ok(entry) = entry {
-                        let metadata = entry.metadata()?;
-                        let mut path_or_none = None;
-                        if opt.follow_links && metadata.is_symlink() {
-                            let p = entry.path().read_link();
+                        let mut path = entry.path();
+                        if opt.follow_links && path.is_symlink() {
+                            let p = path.read_link();
                             if let Ok(p) = p {
-                                path_or_none = Some(p);
+                                path = p;
                             } else {
                                 eprintln!("{}: {}: {}", prog, path.display(), p.unwrap_err());
                                 continue;
@@ -83,10 +82,6 @@ fn breadth_first_traverse(prog: &str, cwd: &Path, opt: &Options, in_queue: &Path
                             if opt.ignores.iter().any(|item| item == file_name) {
                                 continue;
                             }
-                            if path_or_none.is_none() {
-                                path_or_none = Some(entry.path());
-                            }
-                            let path = unsafe { path_or_none.unwrap_unchecked() };
                             if opt.strip_cwd_prefix {
                                 if path.starts_with("./") {
                                     println!("{}", unsafe { path.strip_prefix("./").unwrap_unchecked() }.display());
@@ -217,7 +212,7 @@ fn main() {
 
     let num_threads = {
         if let Ok(n) = thread::available_parallelism() {
-            n.get()
+            n.get() + 1
         } else {
             exit(1);
         }
