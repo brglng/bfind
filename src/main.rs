@@ -25,7 +25,7 @@ enum Error {
     PathQueue {
         #[from]
         source: path_queue::Error
-    }
+    },
 }
 
 type Result<T> = std::result::Result<T, Error>;
@@ -92,6 +92,8 @@ fn breadth_first_traverse(prog: &str, cwd: &Path, opt: &Options, in_queue: &Path
                                     println!("{}", unsafe { path.strip_prefix("./").unwrap_unchecked() }.display());
                                 } else if path.starts_with(cwd) {
                                     println!("{}", unsafe { path.strip_prefix(cwd).unwrap_unchecked() }.display());
+                                } else {
+                                    println!("{}", path.display());
                                 }
                             } else {
                                 println!("{}", path.display());
