@@ -199,6 +199,8 @@ pub struct PathQueue {
     push_count:     Mutex<Wrapping<usize>>,
     push_cond:      Condvar,
     pop_count:      AtomicUsize,
+    push_mutex:     Mutex<()>,
+    pop_mutex:      Mutex<()>,
     spill_mutex:    Mutex<()>,
     left:           UnsafeCell<MemPathQueue>,
     mid:            UnsafeCell<Option<TempfilePathQueue>>,
@@ -212,6 +214,8 @@ impl PathQueue {
             push_count: Mutex::new(Wrapping(0)),
             push_cond: Condvar::new(),
             pop_count: AtomicUsize::new(0),
+            push_mutex: Mutex::new(()),
+            pop_mutex: Mutex::new(()),
             spill_mutex: Mutex::new(()),
             left: UnsafeCell::new(MemPathQueue::new(read_buf_len)),
             mid: UnsafeCell::new(None),
@@ -221,6 +225,8 @@ impl PathQueue {
 
     // only safe when there is only a single pusher
     pub fn push(&self, path: PathBuf) -> Result<()> {
+        let _push_guard = self.push_mutex.lock().unwrap();
+
         let left = unsafe { &mut *self.left.get() };
         let mid = unsafe { &mut *self.mid.get() };
         let right = unsafe { &mut *self.right.get() };
@@ -256,6 +262,8 @@ impl PathQueue {
 
     // only safe when there is only a single popper
     pub fn pop_timeout(&self, ms: u64) -> Result<Option<PathBuf>> {
+        let _pop_guard = self.pop_mutex.lock().unwrap();
+
         let left = unsafe { &mut *self.left.get() };
         let mid = unsafe { &*self.mid.get() };
         let right = unsafe { &mut *self.right.get() };
@@ -313,8 +321,8 @@ impl PathQueue {
 
     #[cfg(test)]
     pub fn state(&self) -> (PathQueueState, PathQueueState, PathQueueState) {
-        let _push_count = self.push_count.lock().unwrap();
-        let _spill_guard = self.spill_mutex.lock().unwrap();
+        let _push_guard= self.push_mutex.lock().unwrap();
+        let _pop_guard = self.pop_mutex.lock().unwrap();
         let left = unsafe { &*self.left.get() };
         let mid = unsafe { &*self.mid.get() };
         let right = unsafe { &*self.right.get() };

@@ -52,9 +52,6 @@ impl Options {
 
 fn breadth_first_traverse(prog: &str, cwd: &Path, opt: &Options, in_queue: &PathQueue, out_queue: &PathQueue, counter: &AtomicUsize) -> Result<()> {
     loop {
-        if counter.load(Ordering::Acquire) == 0 {
-            break;
-        }
         let path = in_queue.pop_timeout(10)?;
         if let Some(path) = path {
             let entries = fs::read_dir(&path);
@@ -108,6 +105,8 @@ fn breadth_first_traverse(prog: &str, cwd: &Path, opt: &Options, in_queue: &Path
                 eprintln!("{}: {}: {}", prog, path.display(), entries.unwrap_err());
             }
             counter.fetch_sub(1, Ordering::Release);
+        } else if counter.load(Ordering::Acquire) == 0 {
+            break;
         }
     }
     Ok(())
