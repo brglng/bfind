@@ -50,9 +50,9 @@ impl Options {
     }
 }
 
-fn breadth_first_traverse(prog: &str, cwd: &Path, opt: &Options, in_queue: &PathQueue, out_queue: &PathQueue, counter: &AtomicUsize) -> Result<()> {
+fn breadth_first_traverse(prog: &str, cwd: &Path, opt: &Options, queue: &PathQueue, counter: &AtomicUsize) -> Result<()> {
     loop {
-        let path = in_queue.pop_timeout(10)?;
+        let path = queue.pop_timeout(10)?;
         if let Some(path) = path {
             let entries = fs::read_dir(&path);
             if let Ok(entries) = entries {
@@ -91,7 +91,7 @@ fn breadth_first_traverse(prog: &str, cwd: &Path, opt: &Options, in_queue: &Path
                                 println!("{}", path.display());
                             }
                             if path.is_dir() {
-                                out_queue.push(path)?;
+                                queue.push(path)?;
                                 counter.fetch_add(1, Ordering::Release);
                             }
                         } else {
@@ -216,22 +216,20 @@ fn main() {
             exit(1);
         }
     };
-    let mut queues = Vec::new();
-    for _ in 0..num_threads {
-        let queue = PathQueue::new((1024 * 512 / num_threads) as u32, (1024 * 512 / num_threads) as u32);
-        if let Ok(queue) = queue {
-            queues.push(queue);
+    let queue = {
+        let q = PathQueue::new(1024 * 512, 1024 * 512);
+        if let Ok(q) = q {
+            q
         } else {
-            let e = queue.unwrap_err();
-            eprintln!("{}: {}", prog, e);
+            eprintln!("{}: {}", prog, q.unwrap_err());
             exit(1);
         }
-    }
+    };
 
     let mut counter: usize = 0;
 
     if roots.is_empty() {
-        if let Err(e) = queues[0].push(PathBuf::from(".")) {
+        if let Err(e) = queue.push(PathBuf::from(".")) {
             eprintln!("{}: {}", prog, e);
             exit(1);
         }
@@ -266,7 +264,7 @@ fn main() {
                     unreachable!("path ends with \"..\", which should not happen");
                 }
             }
-            if let Err(e) = queues[0].push(path) {
+            if let Err(e) = queue.push(path) {
                 eprintln!("{}: {}", prog, e);
                 exit(1)
             } else {
@@ -279,15 +277,11 @@ fn main() {
     if let Err(e) = thread::scope(|s| -> Result<()> {
         let cwd = &cwd;
         let options = &options;
-        let queues = &queues;
+        let queue = &queue;
         let counter = &counter;
-        for i in 0..num_threads {
+        for _ in 0..num_threads {
             s.spawn(move|| -> Result<()> {
-                breadth_first_traverse(
-                    prog, cwd, options,
-                    &queues[i],
-                    &queues[(i + 1) % num_threads],
-                    counter)
+                breadth_first_traverse(prog, cwd, options, queue, counter)
             });
         }
         Ok(())
