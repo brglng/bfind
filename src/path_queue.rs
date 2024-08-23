@@ -15,12 +15,10 @@ use std::num::Wrapping;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
-use std::sync::Condvar;
-use std::time::Duration;
-use std::sync::Mutex;
 use tempfile::NamedTempFile;
 use thiserror::Error;
 
@@ -34,11 +32,14 @@ pub enum Error {
         #[from]
         source: io::Error
     },
+
+    #[error("path_queue::SpinLockFailed")]
+    SpinLockFailed,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum PathQueueState {
     Empty,
     PartiallyFilled,
@@ -85,6 +86,7 @@ impl MemPathQueue {
         }
     }
 
+    // safe if and only if there is only one push thread
     pub fn push(&mut self, path: PathBuf) -> Option<PathBuf> {
         let push_count = self.push_count.load(Ordering::Acquire);
         let pop_count = self.pop_count.load(Ordering::Acquire);
@@ -98,6 +100,7 @@ impl MemPathQueue {
         None
     }
 
+    // safe if and only if there is only one pop thread
     pub fn pop(&mut self) -> Option<PathBuf> {
         let push_count = self.push_count.load(Ordering::Acquire);
         let pop_count = self.pop_count.load(Ordering::Acquire);
@@ -157,7 +160,8 @@ impl TempfilePathQueue {
         Ok(q)
     }
 
-    pub fn push(&self, path: &Path) -> Result<()> {
+    // safe if and only if there is only one push thread
+    pub fn push(&mut self, path: &Path) -> Result<()> {
         let writer = unsafe { &mut *self.writer.get() };
         writer.write_all(path.as_os_str().as_bytes())?;
         writer.write_all(b"\0")?;
@@ -166,7 +170,8 @@ impl TempfilePathQueue {
         Ok(())
     }
 
-    pub fn pop(&self) -> Result<Option<PathBuf>> {
+    // safe if and only if there is only one pop thread
+    pub fn pop(&mut self) -> Result<Option<PathBuf>> {
         let reader = unsafe { &mut *self.reader.get() };
         let push_count = self.push_count.load(Ordering::Acquire);
         let pop_count = self.pop_count.load(Ordering::Acquire);
@@ -195,13 +200,45 @@ impl TempfilePathQueue {
 unsafe impl Sync for TempfilePathQueue {}
 
 #[derive(Debug)]
+struct SpinLock {
+    locked: AtomicBool
+}
+
+impl SpinLock {
+    pub fn new() -> Self {
+        SpinLock { locked: AtomicBool::new(false) }
+    }
+
+    pub fn try_lock(&self) -> Result<SpinLockGuard> {
+        if let Ok(_) = self.locked.compare_exchange_weak(false, true, Ordering::Release, Ordering::Acquire) {
+            Ok(SpinLockGuard { lock: self })
+        } else {
+            Err(Error::SpinLockFailed)
+        }
+    }
+
+    pub fn unlock(&self) {
+        self.locked.store(false, Ordering::Release);
+    }
+}
+
+struct SpinLockGuard<'a> {
+    pub lock: &'a SpinLock
+}
+
+impl<'a> Drop for SpinLockGuard<'a> {
+    fn drop(&mut self) {
+        self.lock.unlock();
+    }
+}
+
+#[derive(Debug)]
 pub struct PathQueue {
-    push_count:     Mutex<Wrapping<usize>>,
-    push_cond:      Condvar,
+    push_count:     AtomicUsize,
     pop_count:      AtomicUsize,
-    push_mutex:     Mutex<()>,
-    pop_mutex:      Mutex<()>,
-    spill_mutex:    Mutex<()>,
+    pushing:        SpinLock,
+    popping:        SpinLock,
+    spilling:       SpinLock,
     left:           UnsafeCell<MemPathQueue>,
     mid:            UnsafeCell<Option<TempfilePathQueue>>,
     right:          UnsafeCell<MemPathQueue>,
@@ -211,125 +248,113 @@ impl PathQueue {
     pub fn new(read_buf_len: u32, write_buf_len: u32) -> Result<Self> {
         assert!(read_buf_len > 0 && write_buf_len > 0);
         Ok(PathQueue {
-            push_count: Mutex::new(Wrapping(0)),
-            push_cond: Condvar::new(),
+            push_count: AtomicUsize::new(0),
             pop_count: AtomicUsize::new(0),
-            push_mutex: Mutex::new(()),
-            pop_mutex: Mutex::new(()),
-            spill_mutex: Mutex::new(()),
+            pushing: SpinLock::new(),
+            popping: SpinLock::new(),
+            spilling: SpinLock::new(),
             left: UnsafeCell::new(MemPathQueue::new(read_buf_len)),
             mid: UnsafeCell::new(None),
             right: UnsafeCell::new(MemPathQueue::new(write_buf_len)),
         })
     }
 
-    // only safe when there is only a single pusher
-    pub fn push(&self, path: PathBuf) -> Result<()> {
-        let _push_guard = self.push_mutex.lock().unwrap();
+    pub fn push(&self, path: PathBuf) -> Result<Option<PathBuf>> {
+        if let Ok(_pushing) = self.pushing.try_lock() {
+            let left = unsafe { &mut *self.left.get() };
+            let mid = unsafe { &mut *self.mid.get() };
+            let right = unsafe { &mut *self.right.get() };
 
-        let left = unsafe { &mut *self.left.get() };
-        let mid = unsafe { &mut *self.mid.get() };
-        let right = unsafe { &mut *self.right.get() };
-
-        if let Some(path) = right.push(path) {
-            let _spill_guard = self.spill_mutex.lock().unwrap();
-            if mid.is_none() {
-                *mid = Some(TempfilePathQueue::new()?);
-            }
-            let mid = unsafe { mid.as_ref().unwrap_unchecked() };
-            if mid.state().is_empty() {
-                while let Some(p) = right.pop() {
-                    if let Some(p) = left.push(p) {
-                        mid.push(&p)?;
+            if let Some(path) = right.push(path) {
+                if let Ok(_spilling) = self.spilling.try_lock() {
+                    if mid.is_none() {
+                        *mid = Some(TempfilePathQueue::new()?);
                     }
-                }
-            } else {
-                while let Some(p) = right.pop() {
-                    mid.push(&p)?;
+                    let mid = unsafe { mid.as_mut().unwrap_unchecked() };
+                    if mid.state().is_empty() {
+                        while let Some(p) = right.pop() {
+                            if let Some(p) = left.push(p) {
+                                mid.push(&p)?;
+                            }
+                        }
+                    } else {
+                        while let Some(p) = right.pop() {
+                            mid.push(&p)?;
+                        }
+                    }
+                    right.push(path);
+                } else {
+                    return Ok(Some(path));
                 }
             }
-            right.push(path);
-        }
 
-        {
-            let mut push_count = self.push_count.lock().unwrap();
-            *push_count += 1;
-            self.push_cond.notify_one();
-        }
+            self.push_count.fetch_add(1, Ordering::Release);
 
-        Ok(())
+            Ok(None)
+        } else {
+            Ok(Some(path))
+        }
     }
 
-    // only safe when there is only a single popper
-    pub fn pop_timeout(&self, ms: u64) -> Result<Option<PathBuf>> {
-        let _pop_guard = self.pop_mutex.lock().unwrap();
+    pub fn pop(&self) -> Result<Option<PathBuf>> {
+        if let Ok(_popping) = self.popping.try_lock() {
+            let left = unsafe { &mut *self.left.get() };
+            let mid = unsafe { &mut *self.mid.get() };
+            let right = unsafe { &mut *self.right.get() };
 
-        let left = unsafe { &mut *self.left.get() };
-        let mid = unsafe { &*self.mid.get() };
-        let right = unsafe { &mut *self.right.get() };
-
-        if ms == 0 {
-            let _push_count = self.push_cond.wait_while(
-                self.push_count.lock().unwrap(), 
-                |&mut push_count| push_count - Wrapping(self.pop_count.load(Ordering::Acquire)) == Wrapping(0)).unwrap();
-        } else {
-            let result = self.push_cond.wait_timeout_while(
-                self.push_count.lock().unwrap(), 
-                Duration::from_millis(ms), 
-                |&mut push_count| push_count - Wrapping(self.pop_count.load(Ordering::Acquire)) == Wrapping(0)).unwrap();
-            if result.1.timed_out() {
-                return Ok(None);
+            if Wrapping(self.push_count.load(Ordering::Acquire)) - Wrapping(self.pop_count.load(Ordering::Acquire)) == Wrapping(0) {
+                return Ok(None)
             }
-        }
 
-        let path;
-        loop {
-            let _spill_guard = self.spill_mutex.lock().unwrap();
-            if let Some(p) = left.pop() {
-                path = p;
-                break;
-            } else if let Some(mid) = mid {
-                if let Some(p) = mid.pop()? {
+            let path;
+            if let Ok(_spilling) = self.spilling.try_lock() {
+                if let Some(p) = left.pop() {
                     path = p;
-                    break;
+                } else if let Some(mid) = mid {
+                    if let Some(p) = mid.pop()? {
+                        path = p;
+                    } else if let Some(p) = right.pop() {
+                        path = p;
+                    } else {
+                        return Ok(None);
+                    }
                 } else if let Some(p) = right.pop() {
                     path = p;
-                    break;
+                } else {
+                    return Ok(None);
                 }
-            } else if let Some(p) = right.pop() {
-                path = p;
-                break;
+            } else {
+                return Ok(None);
             }
+
+            self.pop_count.fetch_add(1, Ordering::Release);
+
+            Ok(Some(path))
+        } else {
+            Ok(None)
         }
-
-        self.pop_count.fetch_add(1, Ordering::Release);
-
-        Ok(Some(path))
-    }
-
-    #[allow(dead_code)]
-    pub fn pop(&self) -> Result<PathBuf> {
-        let path = self.pop_timeout(0)?;
-        Ok(unsafe { path.unwrap_unchecked() })
     }
 
     #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
-        let push_count = self.push_count.lock().unwrap();
-        *push_count - Wrapping(self.pop_count.load(Ordering::Acquire)) == Wrapping(0)
+        Wrapping(self.push_count.load(Ordering::Acquire)) - Wrapping(self.pop_count.load(Ordering::Acquire)) == Wrapping(0)
     }
 
     #[cfg(test)]
     pub fn state(&self) -> (PathQueueState, PathQueueState, PathQueueState) {
-        let _push_guard= self.push_mutex.lock().unwrap();
-        let _pop_guard = self.pop_mutex.lock().unwrap();
-        let left = unsafe { &*self.left.get() };
-        let mid = unsafe { &*self.mid.get() };
-        let right = unsafe { &*self.right.get() };
-        if let Some(mid) = mid {
-            (left.state(), mid.state(), right.state())
-        } else {
-            (left.state(), PathQueueState::Empty, right.state())
+        loop {
+            if let Ok(_pushing) = self.pushing.try_lock() {
+                if let Ok(_popping) = self.popping.try_lock() {
+                    let left = unsafe { &*self.left.get() };
+                    let mid = unsafe { &*self.mid.get() };
+                    let right = unsafe { &*self.right.get() };
+                    if let Some(mid) = mid {
+                        return (left.state(), mid.state(), right.state())
+                    } else {
+                        return (left.state(), PathQueueState::Empty, right.state())
+                    }
+                }
+            }
         }
     }
 }
@@ -356,12 +381,12 @@ mod tests {
         assert_eq!(q.state(), (PathQueueState::Full, PathQueueState::PartiallyFilled, PathQueueState::PartiallyFilled));
         q.push(PathBuf::from("6"))?;
         assert_eq!(q.state(), (PathQueueState::Full, PathQueueState::PartiallyFilled, PathQueueState::Full));
-        assert_eq!(q.pop()?, PathBuf::from("1"));
-        assert_eq!(q.pop()?, PathBuf::from("2"));
-        assert_eq!(q.pop()?, PathBuf::from("3"));
-        assert_eq!(q.pop()?, PathBuf::from("4"));
-        assert_eq!(q.pop()?, PathBuf::from("5"));
-        assert_eq!(q.pop()?, PathBuf::from("6"));
+        assert_eq!(q.pop()?, Some(PathBuf::from("1")));
+        assert_eq!(q.pop()?, Some(PathBuf::from("2")));
+        assert_eq!(q.pop()?, Some(PathBuf::from("3")));
+        assert_eq!(q.pop()?, Some(PathBuf::from("4")));
+        assert_eq!(q.pop()?, Some(PathBuf::from("5")));
+        assert_eq!(q.pop()?, Some(PathBuf::from("6")));
         Ok(())
     }
 
@@ -371,18 +396,26 @@ mod tests {
         let count = 100000;
         thread::scope(|s| -> Result<()> {
             s.spawn(|| -> Result<()> {
-                for i in 0..count {
-                    let path = queue.pop()?;
-                    eprintln!("popped {}", path.display());
-                    assert_eq!(path.to_str().unwrap(), i.to_string());
+                let mut i = 0;
+                loop {
+                    if let Some(path) = queue.pop()? {
+                        eprintln!("popped {}", path.display());
+                        assert_eq!(path.to_str().unwrap(), i.to_string());
+                        i += 1;
+                        if i == count {
+                            break;
+                        }
+                    }
                 }
                 Ok(())
             });
             s.spawn(|| -> Result<()> {
                 for i in 0..count {
-                    let path = PathBuf::from(i.to_string());
+                    let mut path = PathBuf::from(i.to_string());
                     let path_string = path.to_str().unwrap().to_string();
-                    queue.push(path)?;
+                    while let Some(p) = queue.push(path)? {
+                        path = p;
+                    }
                     eprintln!("pushed {}", path_string);
                 }
                 Ok(())

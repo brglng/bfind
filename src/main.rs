@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::process::exit;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 use std::thread;
 use thiserror::Error;
 
@@ -50,9 +51,47 @@ impl Options {
     }
 }
 
-fn breadth_first_traverse(prog: &str, cwd: &Path, opt: &Options, queue: &PathQueue, counter: &AtomicUsize) -> Result<()> {
+fn pop_or_steal(queues: &[PathQueue], index: usize) -> Result<Option<PathBuf>> {
+    if let Some(path) = queues[index].pop()? {
+        Ok(Some(path))
+    } else {
+        for i in 0..queues.len() {
+            if i != index {
+                if let Some(path) = queues[i].pop()? {
+                    return Ok(Some(path));
+                }
+            }
+        }
+        Ok(None)
+    }
+}
+
+fn push(queues: &[PathQueue], index: usize, path: PathBuf) -> Result<()> {
+    if let Some(mut path) = queues[index].push(path)? {
+        loop {
+            for i in 0..queues.len() {
+                if i != index {
+                    if let Some(p) = queues[i].push(path)? {
+                        path = p;
+                    } else {
+                        return Ok(());
+                    }
+                }
+            }
+            if let Some(p) = queues[index].push(path)? {
+                path = p;
+            } else {
+                return Ok(());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn breadth_first_traverse(prog: &str, cwd: &Path, opt: &Options, queues: &[PathQueue], index: usize, counter: &AtomicUsize) -> Result<()> {
+    let queue = &queues[index];
     loop {
-        let path = queue.pop_timeout(10)?;
+        let path = pop_or_steal(queues, index)?;
         if let Some(path) = path {
             let entries = fs::read_dir(&path);
             if let Ok(entries) = entries {
@@ -91,7 +130,7 @@ fn breadth_first_traverse(prog: &str, cwd: &Path, opt: &Options, queue: &PathQue
                                 println!("{}", path.display());
                             }
                             if path.is_dir() {
-                                queue.push(path)?;
+                                push(queues, index, path)?;
                                 counter.fetch_add(1, Ordering::Release);
                             }
                         } else {
@@ -107,6 +146,8 @@ fn breadth_first_traverse(prog: &str, cwd: &Path, opt: &Options, queue: &PathQue
             counter.fetch_sub(1, Ordering::Release);
         } else if counter.load(Ordering::Acquire) == 0 {
             break;
+        } else {
+            thread::sleep(Duration::from_millis(13));
         }
     }
     Ok(())
@@ -135,7 +176,7 @@ fn main() {
 
     let mut state = CliState::Options;
     let mut roots: Vec<String> = Vec::new();
-    let mut options = Options::new();
+    let mut opts = Options::new();
     let mut verb = Verb::Print;
     let mut action_tokens = Vec::new();
     let mut expr_tokens: Vec<String> = Vec::new();
@@ -151,9 +192,9 @@ fn main() {
         match state {
             CliState::Options => {
                 if arg == "-H" {
-                    options.allow_hidden = true;
+                    opts.allow_hidden = true;
                 } else if arg == "-L" {
-                    options.follow_links = true;
+                    opts.follow_links = true;
                 } else if arg == "-h" || arg == "--help" {
                     print_help(prog);
                 } else if arg == "-d" || arg == "--depth" {
@@ -163,7 +204,7 @@ fn main() {
                                 eprintln!("{}: depth must be > 0", prog);
                                 exit(1);
                             }
-                            options.max_depth = depth;
+                            opts.max_depth = depth;
                         } else {
                             eprintln!("{}: unable to parse \"{}\" as i32", prog, &depth_str);
                             exit(1);
@@ -174,13 +215,13 @@ fn main() {
                     }
                 } else if arg == "-I" || arg == "--ignore" {
                     if let Some(ignore) = args.pop_front() {
-                        options.ignores = ignore.split(',').map(|s| { s.to_string() }).collect();
+                        opts.ignores = ignore.split(',').map(|s| { s.to_string() }).collect();
                     } else {
                         eprintln!("{}: missing argument to -I", prog);
                         exit(1);
                     }
                 } else if arg == "--strip-cwd-prefix" {
-                    options.strip_cwd_prefix = true;
+                    opts.strip_cwd_prefix = true;
                 } else if arg == "print" {
                     verb = Verb::Print;
                     state = CliState::Action;
@@ -216,20 +257,23 @@ fn main() {
             exit(1);
         }
     };
-    let queue = {
-        let q = PathQueue::new(1024 * 512, 1024 * 512);
+
+    let mut queues = Vec::new();
+    for _ in 0..num_threads {
+        let q = PathQueue::new((1024 * 512 / num_threads) as u32,
+                                                         (1024 * 512 / num_threads) as u32);
         if let Ok(q) = q {
-            q
+            queues.push(q);
         } else {
             eprintln!("{}: {}", prog, q.unwrap_err());
             exit(1);
         }
-    };
+    }
 
     let mut counter: usize = 0;
 
     if roots.is_empty() {
-        if let Err(e) = queue.push(PathBuf::from(".")) {
+        if let Err(e) = queues[0].push(PathBuf::from(".")) {
             eprintln!("{}: {}", prog, e);
             exit(1);
         }
@@ -240,21 +284,21 @@ fn main() {
         let rootdir = Path::new("/");
         for root in &roots {
             let path = PathBuf::from(root);
-            if !options.follow_links && path.is_symlink() {
+            if !opts.follow_links && path.is_symlink() {
                 continue;
             }
             if path != dotdir && path != dotdotdir && path != rootdir {
                 eprintln!("{}", path.display());
                 if let Some(file_name) = path.file_name() {
                     if let Some(file_name) = file_name.to_str() {
-                        if !options.allow_hidden {
+                        if !opts.allow_hidden {
                             if let Some(first_char) = file_name.chars().next() {
                                 if first_char == '.' {
                                     continue;
                                 }
                             }
                         }
-                        if options.ignores.iter().any(|item| item == file_name) {
+                        if opts.ignores.iter().any(|item| item == file_name) {
                             continue;
                         }
                     } else {
@@ -264,7 +308,7 @@ fn main() {
                     unreachable!("path ends with \"..\", which should not happen");
                 }
             }
-            if let Err(e) = queue.push(path) {
+            if let Err(e) = queues[0].push(path) {
                 eprintln!("{}: {}", prog, e);
                 exit(1)
             } else {
@@ -276,12 +320,12 @@ fn main() {
     let counter = AtomicUsize::new(counter);
     if let Err(e) = thread::scope(|s| -> Result<()> {
         let cwd = &cwd;
-        let options = &options;
-        let queue = &queue;
+        let opts = &opts;
+        let queues = &queues;
         let counter = &counter;
-        for _ in 0..num_threads {
+        for i in 0..num_threads {
             s.spawn(move|| -> Result<()> {
-                breadth_first_traverse(prog, cwd, options, queue, counter)
+                breadth_first_traverse(prog, cwd, opts, queues, i, counter)
             });
         }
         Ok(())
