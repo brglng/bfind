@@ -55,9 +55,9 @@ fn pop_or_steal(queues: &[PathQueue], index: usize) -> Result<Option<PathBuf>> {
     if let Some(path) = queues[index].pop()? {
         Ok(Some(path))
     } else {
-        for i in 0..queues.len() {
+        for (i, queue) in queues.iter().enumerate() {
             if i != index {
-                if let Some(path) = queues[i].pop()? {
+                if let Some(path) = queue.pop()? {
                     return Ok(Some(path));
                 }
             }
@@ -69,9 +69,9 @@ fn pop_or_steal(queues: &[PathQueue], index: usize) -> Result<Option<PathBuf>> {
 fn push(queues: &[PathQueue], index: usize, path: PathBuf) -> Result<()> {
     if let Some(mut path) = queues[index].push(path)? {
         loop {
-            for i in 0..queues.len() {
+            for (i, queue) in queues.iter().enumerate() {
                 if i != index {
-                    if let Some(p) = queues[i].push(path)? {
+                    if let Some(p) = queue.push(path)? {
                         path = p;
                     } else {
                         return Ok(());
