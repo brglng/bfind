@@ -80,7 +80,3 @@ $ bfind . exec cat '{fullpath}' -- name glob 'foo*.txt'
 
 - Design a simple and powerful command line syntax.
 - Implement the command line interface.
-
-## License
-
-GNU LGPL v3
