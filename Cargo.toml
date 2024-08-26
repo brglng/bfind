@@ -1,7 +1,7 @@
 [package]
 name = "bfind"
 edition = "2021"
-version = "0.0.2"
+version = "0.0.3"
 authors = ["Zhaosheng Pan <zhaosheng.pan@sololand.moe"]
 description = "A GNU find-like tool, but uses breadth-first search instead of depth-first search"
 license = "Apache-2.0"
