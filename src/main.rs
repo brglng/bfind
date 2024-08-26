@@ -89,7 +89,6 @@ fn push(queues: &[PathQueue], index: usize, path: PathBuf) -> Result<()> {
 }
 
 fn breadth_first_traverse(prog: &str, cwd: &Path, opt: &Options, queues: &[PathQueue], index: usize, counter: &AtomicUsize) -> Result<()> {
-    let queue = &queues[index];
     loop {
         let path = pop_or_steal(queues, index)?;
         if let Some(path) = path {
@@ -147,7 +146,7 @@ fn breadth_first_traverse(prog: &str, cwd: &Path, opt: &Options, queues: &[PathQ
         } else if counter.load(Ordering::Acquire) == 0 {
             break;
         } else {
-            thread::sleep(Duration::from_millis(13));
+            thread::sleep(Duration::from_millis(7));
         }
     }
     Ok(())
@@ -260,8 +259,7 @@ fn main() {
 
     let mut queues = Vec::new();
     for _ in 0..num_threads {
-        let q = PathQueue::new((1024 * 512 / num_threads) as u32,
-                                                         (1024 * 512 / num_threads) as u32);
+        let q = PathQueue::new((1024 * 512 / num_threads) as u32, (1024 * 512 / num_threads) as u32);
         if let Ok(q) = q {
             queues.push(q);
         } else {
