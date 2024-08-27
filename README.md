@@ -2,7 +2,7 @@
 
 ![build](https://github.com/brglng/bfind/actions/workflows/rust.yml/badge.svg)
 
-A [GNU find](https://www.gnu.org/software/findutils/)-like tool, but uses breadth-first search instead of depth-first search, written in [Rust](https://www.rust-lang.org/).
+A [GNU Find](https://www.gnu.org/software/findutils/)-like tool, but uses breadth-first search instead of depth-first search, written in [Rust](https://www.rust-lang.org/).
 
 ## Why
 
@@ -32,7 +32,7 @@ $ cargo install --path .
 
 ## Usage
 
-Currently, only basic directory listing is implemented.
+**NOTE: Currently, only basic directory listing is implemented.**
 
 List current working directory:
 
