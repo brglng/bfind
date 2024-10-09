@@ -12,7 +12,6 @@ use std::io::Write;
 use std::mem::align_of;
 use std::mem::size_of;
 use std::num::Wrapping;
-use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -163,7 +162,7 @@ impl TempfilePathQueue {
     // safe if and only if there is only one push thread
     pub fn push(&mut self, path: &Path) -> Result<()> {
         let writer = unsafe { &mut *self.writer.get() };
-        writer.write_all(path.as_os_str().as_bytes())?;
+        writer.write_all(path.as_os_str().as_encoded_bytes())?;
         writer.write_all(b"\0")?;
         writer.flush()?;
         self.push_count.fetch_add(1, Ordering::Release);
@@ -183,7 +182,7 @@ impl TempfilePathQueue {
         let delim = buffer.pop();
         assert_eq!(delim, Some(b'\0'));
         self.pop_count.fetch_add(1, Ordering::Release);
-        let path = PathBuf::from(OsStr::from_bytes(&buffer));
+        let path = PathBuf::from(unsafe { OsStr::from_encoded_bytes_unchecked(&buffer) });
         Ok(Some(path))
     }
 
